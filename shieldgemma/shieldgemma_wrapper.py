@@ -17,6 +17,7 @@ import os
 import re
 from typing import Dict, Any, Optional, List
 import warnings
+from wrappers.logging_utils import get_logger
 
 # Try to import required dependencies
 try:
@@ -43,6 +44,8 @@ NO_TOKEN = "No"
 _model = None
 _tokenizer = None
 _device = None
+_log = get_logger("shieldgemma_wrapper")
+_load_error: Optional[str] = None
 
 # Safety guidelines for different harm types (Prompt-only format)
 SAFETY_GUIDELINES = {
@@ -72,41 +75,53 @@ def _load_model(device: str = "cuda"):
         Tuple of (model, tokenizer)
     """
     global _model, _tokenizer, _device
+    global _load_error
+
+    if _load_error is not None:
+        raise RuntimeError(_load_error)
     
     if _model is not None and _tokenizer is not None and _device == device:
         return _model, _tokenizer
     
     if not TRANSFORMERS_AVAILABLE or not TORCH_AVAILABLE:
-        raise ImportError(
+        _load_error = (
             "Required dependencies not available. Install with: "
             "pip install transformers[accelerate] torch"
         )
+        raise ImportError(_load_error)
     
-    print(f"Loading ShieldGemma-2b model...")
+    # Avoid noisy prints; wrappers should be quiet by default.
     
     # Determine device
     if device == "cuda" and not torch.cuda.is_available():
-        warnings.warn("CUDA not available, using CPU instead")
+        _log.warning("CUDA not available, using CPU instead")
         device = "cpu"
         _device = "cpu"
     else:
         _device = device
     
     # Load tokenizer
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    try:
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    except Exception as e:
+        _load_error = f"{type(e).__name__}: {e}"
+        raise
     
     # Load model
     device_map = "auto" if device == "cuda" else "cpu"
-    _model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        device_map=device_map,
-        torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
-    )
+    try:
+        _model = AutoModelForCausalLM.from_pretrained(
+            MODEL_NAME,
+            device_map=device_map,
+            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
+        )
+    except Exception as e:
+        _load_error = f"{type(e).__name__}: {e}"
+        raise
     
     # Set to eval mode
     _model.eval()
     
-    print("✅ Model loaded successfully")
     return _model, _tokenizer
 
 
@@ -186,7 +201,7 @@ def _get_score_from_logits(model, tokenizer, prompt: str, device: str) -> float:
                 no_idx = idx
     
     if yes_idx is None or no_idx is None:
-        warnings.warn("Could not find 'Yes' or 'No' tokens in vocabulary. Using fallback method.")
+        _log.warning("Could not find 'Yes'/'No' tokens in vocabulary; using fallback score=0.5")
         # Fallback: return 0.5 (uncertain)
         return 0.5
     
@@ -235,19 +250,21 @@ def evaluate_text(
             - individual_results: Dictionary with detailed results
             - violation_probability: Raw probability of violation (0.0 to 1.0)
     """
+    from wrappers.utils import apply_triage, get_effective_device, safe_error_result
+
+    effective_device = get_effective_device(device)
+
     # Check dependencies
     if not TRANSFORMERS_AVAILABLE or not TORCH_AVAILABLE:
-        return {
-            "is_safe": True,
-            "average_confidence": 0.0,
-            "flags": [],
-            "individual_results": {"error": "transformers or torch not available"},
-            "violation_probability": 0.0
-        }
+        return safe_error_result(
+            wrapper_name="shieldgemma",
+            reason="transformers or torch not available",
+            threshold=threshold,
+        )
     
     try:
         # Load model (lazy loading)
-        model, tokenizer = _load_model(device=device)
+        model, tokenizer = _load_model(device=effective_device)
         
         # Determine safety policy
         if safety_policy:
@@ -261,50 +278,34 @@ def evaluate_text(
         prompt = _format_prompt(text, policy)
         
         # Get violation probability using scoring mode
-        violation_probability = _get_score_from_logits(model, tokenizer, prompt, device)
+        violation_probability = _get_score_from_logits(model, tokenizer, prompt, effective_device)
         
-        # Determine if content is safe based on threshold
-        is_safe = violation_probability < threshold
-        
-        # Create flags list
-        flags = []
-        if not is_safe:
-            harm_category = harm_type if harm_type else "general"
-            flags.append({
-                "safeguard": "shieldgemma",
-                "harm_type": harm_category,
-                "confidence": violation_probability
-            })
-        
-        # Prepare individual results
-        individual_results = {
-            "shieldgemma": {
-                "harm_type": harm_type if harm_type else "general",
-                "violation_probability": violation_probability,
-                "is_safe": is_safe,
-                "threshold": threshold
-            }
+        score_unsafe = float(violation_probability)
+        payload = {
+            "harm_type": harm_type if harm_type else "general",
+            "violation_probability": float(violation_probability),
+            "threshold": float(threshold),
+            "device": effective_device,
+            "model": MODEL_NAME,
+            "score_unsafe": score_unsafe,
         }
-        
-        return {
-            "is_safe": is_safe,
-            "average_confidence": violation_probability,
-            "flags": flags,
-            "individual_results": individual_results,
-            "violation_probability": violation_probability
-        }
+
+        out = apply_triage(
+            wrapper_name="shieldgemma",
+            score_unsafe=score_unsafe,
+            threshold=threshold,
+            individual_payload=payload,
+        )
+        out["violation_probability"] = float(violation_probability)
+        return out
         
     except Exception as e:
-        warnings.warn(f"Error evaluating text with ShieldGemma: {e}")
-        import traceback
-        traceback.print_exc()
-        return {
-            "is_safe": True,  # Default to safe on error
-            "average_confidence": 0.0,
-            "flags": [],
-            "individual_results": {"error": str(e)},
-            "violation_probability": 0.0
-        }
+        _log.warning("ShieldGemma evaluate_text failed: %s", e)
+        return safe_error_result(
+            wrapper_name="shieldgemma",
+            reason=f"{type(e).__name__}: {e}",
+            threshold=threshold,
+        )
 
 
 if __name__ == "__main__":

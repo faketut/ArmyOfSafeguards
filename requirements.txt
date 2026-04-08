@@ -1,5 +1,6 @@
 transformers>=4.44
 torch
+sentencepiece
 scikit-learn
 evaluate
 datasets==3.6.0

@@ -37,6 +37,10 @@ ENV/
 .DS_Store
 Thumbs.db
 
+# Local secrets / environment files
+.env
+.env.*
+
 # Model cache
 .cache/
 *.pt

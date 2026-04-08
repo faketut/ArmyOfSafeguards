@@ -66,6 +66,15 @@ python benchmark/run_benchmark.py --benchmark JailbreakBench --threshold 0.8
 python benchmark/run_benchmark.py --benchmark WildGuardMix
 ```
 
+### Compare aggregators (base vs weighted vs meta)
+
+Runs **one** expert pass per example, then applies `base`, `weighted`, and `meta` aggregation. Prints overall metrics and per-domain F1 when `metadata` includes a `domain` field (otherwise the benchmark name is used as the domain tag).
+
+```bash
+export AOS_BENCH_BATCH=1
+python benchmark/run_benchmark.py --benchmark JailbreakBench --limit 200 --compare-aggregators --threshold 0.5
+```
+
 ### Run All Benchmarks
 
 ```bash

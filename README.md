@@ -1,244 +1,167 @@
 # Army of Safeguards
 
-**CS399 - UR2PhD Project** - A modular multiagent safeguarding system for LLM output detection
-
-A modular collection of AI safety safeguards for detecting various types of harmful or problematic content.
+A modular, research-friendly collection of **AI safety “safeguards”** (specialized detectors) for flagging harmful or problematic content, plus an **aggregator** that runs multiple safeguards and returns a unified safety assessment.
 
 
-## 🏗️ Project Structure
+## Badges
+
+- **Python**: 3.9+
+- **Status**: active development
+- **License**: TBD (see [License](#license))
+
+## Key features
+
+- **Modular experts**: separate safeguards for factuality, sexual/sensitive content, toxicity, and jailbreak attempts
+- **Unified API**: a single `evaluate_text(...)` call to run all safeguards together
+- **CLI-friendly**: run individual experts or the aggregator from the command line
+- **Benchmarking & evaluation**: scripts and documented results for each safeguard
+
+## Project layout
 
 ```
 ArmyOfSafeguards/
-├── factuality/              # Factuality checking safeguard
-│   ├── safeguard_factuality.py
-│   ├── README.md
-│   └── tests/               # Factuality-specific tests
-│       ├── test_factuality.py
-│       ├── quick_test.py
-│       ├── benchmark_factuality.py
-│       ├── evaluate_factuality.py
-│       └── EVALUATION_SUMMARY.md
-├── toxicity/                # Toxicity detection
-│   ├── safeguard_toxicity.py
-│   ├── README.md
-│   └── tests/               # Toxicity-specific tests
-│       ├── test_toxicity.py
-│       ├── quick_test.py
-│       └── evaluate_toxicity.py
-├── sexual/                  # Sexual content detection
-│   ├── safeguard_sexual.py
-│   ├── README.md
-│   └── tests/               # Sexual content-specific tests
-│       ├── test_sexual.py
-│       ├── quick_test.py
-│       └── evaluate_sexual.py
-├── jailbreak/               # Jailbreak attempt detection
-│   ├── safeguard_jailbreak.py
-│   ├── README.md
-│   └── tests/               # Jailbreak content-specific tests
-│       ├── quick_test.py
-│       └── benchmark_jailbreak_jbb.py
+├── experts/                 # Expert safeguards (specialized detectors)
+│   ├── factuality.py
+│   ├── toxicity.py
+│   ├── sexual.py
+│   ├── jailbreak.py
+│   └── __init__.py
+├── docs/                    # Documentation
+│   └── experts/             # Per-expert docs
+├── training/                # Training scripts / notebooks — see training/README.md
+│   ├── jailbreak/
+│   ├── sexual/
+│   ├── meta/                # Meta-aggregator data & expert-featurization scripts
+│   └── teacher_dataset/     # Q-values + ShieldGemma/Granite teacher labels → meta training
+├── meta_classifier/         # Learned logistic meta-model over expert outputs
+├── docs/
+│   ├── experts/             # Per-expert docs
+│   ├── meta_training_labeling.md  # Meta training JSONL schema & labeling
+│   └── experts_training_status.md # Which experts are pretrained vs trainable locally
 ├── aggregator/              # Unified interface for all safeguards
 │   ├── aggregator.py
 │   └── README.md
 ├── requirements.txt         # Shared dependencies
-├── .gitignore
 └── README.md
 ```
 
-## 🚀 Quick Start
+## Getting started
 
-### 1. Setup
+### Install
 
 ```bash
-# Clone the repository
 git clone https://github.com/SohamNagi/ArmyOfSafeguards.git
 cd ArmyOfSafeguards
 
-# Create virtual environment
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-# Install dependencies
 pip install -r requirements.txt
 ```
 
-### 2. Use Individual Safeguards
+### Quick usage (CLI)
+
+Run an individual safeguard:
 
 ```bash
-# Run factuality check
-python factuality/safeguard_factuality.py "The Earth is flat."
-
-# Run sexual content check
-python sexual/safeguard_sexual.py "Your text to evaluate"
-
-# Run toxicity check
-python toxicity/safeguard_toxicity.py "Your text to evaluate"
-
-# Run jailbreak check
-python jailbreak/safeguard_jailbreak.py "Your text to evaluate"
+python experts/factuality.py "The Earth is flat."
+python experts/sexual.py "Your text to evaluate"
+python experts/toxicity.py "Your text to evaluate"
+python experts/jailbreak.py "Your text to evaluate"
 ```
 
-### 3. Aggregator (All Safeguards)
-
-The aggregator runs all available safeguards and provides a unified safety assessment:
+Run the aggregator (all safeguards):
 
 ```bash
-# Run aggregator (includes factuality, sexual, toxicity, jailbreak)
 python aggregator/aggregator.py "Your text to evaluate here"
 ```
 
-## 📦 Safeguards Status
+### Quick usage (Python)
 
-### ✅ Complete
+Individual expert:
 
-#### Factuality Safeguard (Ajith)
-- **Model**: `ajith-bondili/deberta-v3-factuality-small`
-- **Purpose**: Detects factually incorrect or misleading statements
-- **Performance**: 54-81% accuracy on out-of-distribution datasets
-- **Documentation**: [factuality/README.md](factuality/README.md)
-- **Tests**: [factuality/tests/README.md](factuality/tests/README.md)
-
-#### Sexual Content Safeguard (Jian)
-- **Model**: `faketut/x-sensitive-deberta-binary`
-- **Purpose**: Detects sexual and sensitive content (profanity, self-harm, drugs, etc.)
-- **Performance**: 82.6% accuracy, 82.9% F1-score on test set
-- **Documentation**: [sexual/README.md](sexual/README.md)
-- **Tests**: [sexual/tests/README.md](sexual/tests/README.md)
-
-#### Toxicity Safeguard (Soham)
-- **Model**: `SohamNagi/tiny-toxicity-classifier`
-- **Purpose**: Detects toxic, racist, and hateful content
-- **Performance**: 79% accuracy on ToxiGen test set
-- **Documentation**: [toxicity/README.md](toxicity/README.md)
-- **Tests**: [toxicity/tests/README.md](toxicity/tests/README.md)
-
-#### Jailbreak Safeguard (Tommy)
-- **Model**: `tommypang04/finetuned-model-jailbrak`
-- **Purpose**: Detects jailbreak attempts in prompts
-- **Documentation**: [jailbreak/README.md](jailbreak/README.md)
-
-### 🚧 In Development
-- Additional evaluation datasets and metrics
-
-### ✅ Infrastructure Complete
-- **Aggregator Framework**: Ready to integrate multiple safeguards
-- **Testing Template**: Comprehensive test structure for teammates to follow
-- **Documentation Template**: Clear pattern for documenting safeguards
-
-## 🔧 Usage
-
-### Individual Safeguards
-
-**Factuality Safeguard**:
 ```python
-from factuality.safeguard_factuality import predict
-
-result = predict("The sky is blue.")
-print(f"Label: {result['label']}, Confidence: {result['confidence']:.2%}")
-```
-
-**Sexual Content Safeguard**:
-```python
-from sexual.safeguard_sexual import predict
-
-result = predict("This is a normal sentence.")
-print(f"Label: {result['label']}, Confidence: {result['confidence']:.2%}")
-```
-
-**Toxicity Safeguard**:
-```python
-from toxicity.safeguard_toxicity import predict
+from experts.toxicity import predict
 
 result = predict("Hello, how are you?")
 print(f"Label: {result['label']}, Confidence: {result['confidence']:.2%}")
 ```
 
-**Jailbreak Safeguard**:
-```python
-from jailbreak.safeguard_jailbreak import predict
+Aggregator:
 
-result = predict("Your prompt here")
-print(f"Label: {result['label']}, Confidence: {result['confidence']:.2%}")
-```
-
-### Aggregator (All Safeguards)
-
-**Python API**:
 ```python
 from aggregator.aggregator import evaluate_text
 
-# Runs all available safeguards (factuality, sexual, toxicity, jailbreak)
 result = evaluate_text("Your text here", threshold=0.7)
 print(f"Is Safe: {result['is_safe']}")
 print(f"Individual Results: {result['individual_results']}")
 ```
 
-**Command Line**:
+## Included safeguards
+
+- **Factuality safeguard (Ajith)**
+  - **Model**: `ajith-bondili/deberta-v3-factuality-small`
+  - **Docs**: `docs/experts/factuality.md`
+- **Sexual / sensitive-content safeguard (Jian)**
+  - **Model**: `faketut/x-sensitive-deberta-binary`
+  - **Docs**: `docs/experts/sexual.md`
+- **Toxicity safeguard (Soham)**
+  - **Model**: `SohamNagi/tiny-toxicity-classifier`
+  - **Docs**: `docs/experts/toxicity.md`
+- **Jailbreak safeguard (Tommy)**
+  - **Model**: `tommypang04/finetuned-model-jailbrak`
+  - **Docs**: `docs/experts/jailbreak.md`
+
+## Meta aggregator training
+
+- **Training index**: [training/README.md](training/README.md)
+- **Expert / training status**: [docs/experts_training_status.md](docs/experts_training_status.md)
+- **Labeling & schema**: [docs/meta_training_labeling.md](docs/meta_training_labeling.md)
+- **Pipeline & commands**: [training/meta/README.md](training/meta/README.md)
+- **Teacher-labeled data (Q₁…Q₄ + label)**: [training/teacher_dataset/README.md](training/teacher_dataset/README.md) — run `training/teacher_dataset/generate_teacher_labeled_dataset.py` with `--teacher shieldgemma` or `--teacher granite`, then `train_meta` on `--output-meta-jsonl`.
+- Train a model: `python3 -m meta_classifier.train_meta --data training/meta/synthetic_meta_train.jsonl --n-folds 5 --calibrate temperature --out meta_classifier/artifacts/meta_lr.json`
+- End-to-end shell example: `training/teacher_dataset/run_teacher_meta_pipeline.sh`
+- Runtime: set `AOS_META_MODEL_PATH` to your artifact, or use the default path under `meta_classifier/artifacts/`.
+
+## Testing & evaluation
+
+Each safeguard includes runnable tests/evaluators. Example commands:
+
 ```bash
-python aggregator/aggregator.py "Text to check"
+python experts/tests/factuality/quick_test.py
+python experts/tests/sexual/quick_test.py
+python experts/tests/toxicity/quick_test.py
+python experts/tests/jailbreak/quick_test.py
 ```
 
-## 🧪 Testing & Evaluation
+### Reported results (from this repo)
 
-Each safeguard has its own test suite in its directory:
+**Factuality safeguard**
 
-```bash
-# Factuality tests
-python factuality/tests/quick_test.py
-python factuality/tests/test_factuality.py
-python factuality/tests/evaluate_factuality.py
+Model trained on TruthfulQA & FEVER; OOD datasets are most indicative of generalization.
 
-# Sexual content tests
-python sexual/tests/quick_test.py
-python sexual/tests/test_sexual.py
-python sexual/tests/evaluate_sexual.py --limit 100
-
-# Toxicity tests
-python toxicity/tests/quick_test.py
-python toxicity/tests/test_toxicity.py
-python toxicity/tests/evaluate_toxicity.py --limit 100
-
-# Jailbreak tests
-python jailbreak/safeguard_jailbreak.py "Test prompt"
-python jailbreak/tests/quick_test.py
-python jailbreak/tests/benchmark_jailbreak.jbb.py
-```
-
-### Evaluation Results
-
-**Factuality Safeguard Performance**:
-
-⚠️ **Note**: Model trained on TruthfulQA & FEVER - use OOD datasets for true generalization.
-
-**Out-of-Distribution (True Generalization)**:
 | Dataset | Accuracy | F1-Score | Domain |
 |---------|----------|----------|--------|
 | VitaminC | 54.00% | 36.11% | General claims |
 | Climate-FEVER | 81.00% | - | Climate-specific |
 | LIAR | 81.00% | - | Political statements |
 
-**Training Data (Sanity Check)**:
+Sanity check on training-domain datasets:
+
 | Dataset | Accuracy | F1-Score |
 |---------|----------|----------|
 | FEVER | 84.00% | 78.38% |
 | TruthfulQA | 75.00% | - |
 
-**Sexual Content Safeguard Performance**:
+**Sexual / sensitive-content safeguard**
 
-⚠️ **Note**: Model trained on CardiffNLP x_sensitive dataset.
-
-**Test Set Performance**:
 | Metric | Score |
 |--------|-------|
 | Accuracy | 82.6% |
 | F1-Score | 82.9% |
 
-**Toxicity Safeguard Performance**:
+**Toxicity safeguard (ToxiGen)**
 
-⚠️ **Note**: Model trained on ToxiGen dataset.
-
-**ToxiGen Test Set**:
 | Metric | Score |
 |--------|-------|
 | Accuracy | 79.00% |
@@ -246,53 +169,48 @@ python jailbreak/tests/benchmark_jailbreak.jbb.py
 | Recall | 69.23% |
 | F1-Score | 72.00% |
 
-**Jailbreak Safeguard Performance**:
+**Jailbreak safeguard**
 
-⚠️ **Note**: Model trained on TrustAIRLab/in-the-wild-jailbreak-prompts dataset.
-
-**ToxiGen Test Set**:
 | Metric | Score |
 |--------|-------|
 | Accuracy | 94.8248% |
 | F1-Score | 65.7143% |
 
-### Individual Safeguard Benchmark Datasets
+### Benchmarks & datasets
 
-- **Factuality**: TruthfulQA, FEVER, SciFact, VitaminC, Climate-FEVER
-- **Sexual Content**: CardiffNLP x_sensitive
-- **Toxicity**: ToxiGen, hate_speech18, civil_comments
-- **Jailbreak**: JBB-Behaviors
+- **Individual safeguard datasets**
+  - **Factuality**: TruthfulQA, FEVER, SciFact, VitaminC, Climate-FEVER
+  - **Sexual**: CardiffNLP x_sensitive
+  - **Toxicity**: ToxiGen, hate_speech18, civil_comments
+  - **Jailbreak**: JBB-Behaviors
+- **System benchmarks**
+  - **Jailbreak & harmful-content robustness**: [HarmBench](https://huggingface.co/datasets/walledai/HarmBench), [JailbreakBench](https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors)
+  - **Moderation / guardrail benchmarks**: [WildGuardMix](https://huggingface.co/datasets/allenai/wildguardmix)
+  - **Broader safety suites**: [HELM Safety](https://crfm.stanford.edu/helm/safety/latest/)
 
-See individual safeguard test directories for evaluation scripts.
+## Contributing
 
-### Safeguard System Benchmark Datasets
-- **Jailbreak & harmful-content robustness**: [HarmBench](https://huggingface.co/datasets/walledai/HarmBench), [JailbreakBench](https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors)
-- **Moderation / guardrail benchmarks**: [WildGuardMix](https://huggingface.co/datasets/allenai/wildguardmix)
-- **Broader safety suites**: [HELM Safety](https://crfm.stanford.edu/helm/safety/latest/), have to check if it's opensource
+Contributions are welcome. The main extension point is adding new safeguards that follow the same minimal interface used across the repo.
 
-## 🤝 Contributing
+- **Add a new safeguard**
+  - Create a new expert module (e.g., `experts/my_guard.py` or a new folder if needed).
+  - Implement `predict()` returning `{"label": str, "confidence": float}`.
+  - Wire it into the aggregator so it participates in `evaluate_text(...)`.
+  - Add tests and documentation under `docs/experts/`.
 
-Each team member maintains their own safeguard module:
+If you’re making a larger change (new aggregator strategy, new benchmark suite, refactors), please include a short write-up in the PR describing motivation and evaluation.
 
-1. Create your safeguard in its own directory (e.g., `toxicity/`)
-2. Implement `predict()` function that returns `{"label": str, "confidence": float}`
-3. Add your safeguard to the aggregator
-4. Include tests and documentation
+## Security
 
-## 📝 Requirements
+If you discover a vulnerability or an issue that could lead to unsafe behavior in downstream usage, please open an issue with a minimal reproduction and clearly label it **security**.
 
-- Python 3.9+
-- PyTorch
-- Transformers
-- See `requirements.txt` for full list
+## License
 
-## 📄 License
+This repository currently has **no finalized license text** in `README.md`. Add a standard OSS license file (e.g., MIT/Apache-2.0) and update this section accordingly.
 
-[Add license information]
+## Team
 
-## 👥 Team
-
-- **Ajith**: Factuality Safeguard
-- **Soham**: Toxicity Safeguard
-- **Jian**: Sexual Content Safeguard
-- **Tommy**: Jailbreak Safeguard
+- **Ajith**: Factuality safeguard
+- **Soham**: Toxicity safeguard
+- **Jian**: Sexual/sensitive-content safeguard
+- **Tommy**: Jailbreak safeguard

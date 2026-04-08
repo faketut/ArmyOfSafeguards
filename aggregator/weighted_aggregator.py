@@ -13,12 +13,12 @@ Where:
     - wi: weight for safeguard i
     - probability_i: probability that safeguard i flags content as unsafe (0.0-1.0)
 """
-import sys
-from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-# Add parent directory to path so we can import safeguards
-sys.path.insert(0, str(Path(__file__).parent.parent))
+from aggregator.expert_runner import run_all_safeguards
+from policy.dynamic_threshold import context_from_dict
+from policy.triage import TriageConfig, triage_score
+from rules.engine import load_rule_engine_from_env, rules_enabled
 
 
 # Default weights based on task importance and heuristic priorities
@@ -41,49 +41,6 @@ def _normalize_weights(weights: Dict[str, float]) -> Dict[str, float]:
     if total > 0:
         return {k: v / total for k, v in weights.items()}
     return weights
-
-
-def run_all_safeguards(text: str) -> Dict[str, Any]:
-    """
-    Run all available safeguards on the input text.
-
-    Args:
-        text: Input text to evaluate
-
-    Returns:
-        Dictionary containing results from all safeguards
-    """
-    results = {}
-
-    # Import and run factuality safeguard
-    try:
-        from factuality.safeguard_factuality import predict as fact_check
-        results['factuality'] = fact_check(text)
-    except ImportError:
-        results['factuality'] = {"error": "Factuality safeguard not available"}
-
-    # Import and run toxicity safeguard
-    try:
-        from toxicity.safeguard_toxicity import predict as toxic_check
-        results['toxicity'] = toxic_check(text)
-    except ImportError:
-        results['toxicity'] = {"error": "Toxicity safeguard not available"}
-    
-    # Import and run sexual content safeguard
-    try:
-        from sexual.safeguard_sexual import predict as sex_check
-        results['sexual'] = sex_check(text)
-    except ImportError:
-        results['sexual'] = {"error": "Sexual content safeguard not available"}
-
-    # Import and run jailbreak content safeguard
-    try:
-        from jailbreak.safeguard_jailbreak import predict as jailbreak_check
-        results['jailbreak'] = jailbreak_check(text)
-    except ImportError:
-        results['jailbreak'] = {"error": "Jailbreak safeguard not available"}
-
-    return results
 
 
 def _get_unsafe_probability(safeguard_name: str, result: Dict[str, Any]) -> float:
@@ -268,14 +225,14 @@ def aggregate_results(
     is_safe = weighted_score < threshold
     
     return {
-        # 'weighted_score': weighted_score,
+        'weighted_score': weighted_score,
         'is_safe': is_safe,
-        # 'threshold_used': threshold,
+        'threshold_used': threshold,
         'average_confidence': weighted_average_confidence,
         'flags': flags,
-        # 'weighted_contributions': weighted_contributions,
-        # 'probabilities': probabilities,
-        # 'weights': weights_used,  # Return the normalized weights actually used
+        'weighted_contributions': weighted_contributions,
+        'probabilities': probabilities,
+        'weights': weights_used,  # Return the normalized weights actually used
         'individual_results': results
     }
 
@@ -283,7 +240,8 @@ def aggregate_results(
 def evaluate_text(
     text: str, 
     weights: Optional[Dict[str, float]] = None,
-    threshold: Optional[float] = None
+    threshold: Optional[float] = None,
+    context: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Convenience function to run all safeguards and aggregate results using weighted sum.
@@ -296,8 +254,54 @@ def evaluate_text(
     Returns:
         Aggregated safety assessment with weighted score
     """
+    rule_matches = []
+    if rules_enabled():
+        engine = load_rule_engine_from_env()
+        rule_matches = engine.match(text)
+        hard_blocks = [m for m in rule_matches if m.action == "block"]
+        if hard_blocks:
+            return {
+                "is_safe": False,
+                "flags": [
+                    {"safeguard": "rules", "label": m.tag, "confidence": 1.0}
+                    for m in hard_blocks
+                ],
+                "average_confidence": 1.0,
+                "individual_results": {
+                    "rules": {
+                        "label": "block",
+                        "confidence": 1.0,
+                        "matches": [m.__dict__ for m in rule_matches],
+                    }
+                },
+                "rule_matches": [m.__dict__ for m in rule_matches],
+            }
+
     results = run_all_safeguards(text)
-    return aggregate_results(results, weights=weights, threshold=threshold)
+    aggregated = aggregate_results(results, weights=weights, threshold=threshold)
+    if rule_matches:
+        aggregated["rule_matches"] = [m.__dict__ for m in rule_matches]
+        aggregated.setdefault("individual_results", {})["rules"] = {
+            "label": "tag",
+            "confidence": 1.0,
+            "matches": [m.__dict__ for m in rule_matches],
+        }
+
+    # Gray-zone triage (conservative: needs_review counts as not safe).
+    # Use the *effective* threshold from aggregation for compatibility.
+    score = float(aggregated.get("weighted_score", 0.0))
+    effective_threshold = float(aggregated.get("threshold_used", 0.5))
+    cfg = TriageConfig.from_env(default_threshold=effective_threshold)
+    verdict, triage = triage_score(score, config=cfg, ctx=context_from_dict(context))
+    aggregated["verdict"] = verdict
+    aggregated["triage"] = triage
+    aggregated["is_safe"] = verdict == "safe"
+    if verdict != "safe":
+        aggregated.setdefault("flags", []).append(
+            {"safeguard": "triage", "label": verdict, "confidence": score}
+        )
+
+    return aggregated
 
 
 if __name__ == "__main__":

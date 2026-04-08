@@ -4,55 +4,10 @@ Aggregator for Army of Safeguards.
 This module imports all individual safeguard critics and provides
 a unified interface for running multiple safeguards on input text.
 """
-import sys
-from pathlib import Path
 from typing import Dict, List, Any
 
-# Add parent directory to path so we can import safeguards
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
-
-def run_all_safeguards(text: str) -> Dict[str, Any]:
-    """
-    Run all available safeguards on the input text.
-
-    Args:
-        text: Input text to evaluate
-
-    Returns:
-        Dictionary containing results from all safeguards
-    """
-    results = {}
-
-    # Import and run factuality safeguard
-    try:
-        from factuality.safeguard_factuality import predict as fact_check
-        results['factuality'] = fact_check(text)
-    except ImportError:
-        results['factuality'] = {"error": "Factuality safeguard not available"}
-
-    # Import and run toxicity safeguard
-    try:
-        from toxicity.safeguard_toxicity import predict as toxic_check
-        results['toxicity'] = toxic_check(text)
-    except ImportError:
-        results['toxicity'] = {"error": "Toxicity safeguard not available"}
-    
-    # Import and run sexual content safeguard
-    try:
-        from sexual.safeguard_sexual import predict as sex_check
-        results['sexual'] = sex_check(text)
-    except ImportError:
-        results['sexual'] = {"error": "Sexual content safeguard not available"}
-
-    # Import and run jailbreak content safeguard
-    try:
-        from jailbreak.safeguard_jailbreak import predict as jailbreak_check
-        results['jailbreak'] = jailbreak_check(text)
-    except ImportError:
-        results['jailbreak'] = {"error": "Jailbreak safeguard not available"}
-
-    return results
+from aggregator.expert_runner import run_all_safeguards
+from rules.engine import load_rule_engine_from_env, rules_enabled
 
 
 def aggregate_results(results: Dict[str, Dict[str, Any]], threshold: float = 0.7) -> Dict[str, Any]:
@@ -134,8 +89,44 @@ def evaluate_text(text: str, threshold: float = 0.7) -> Dict[str, Any]:
     Returns:
         Aggregated safety assessment
     """
+    rule_matches = []
+    if rules_enabled():
+        engine = load_rule_engine_from_env()
+        rule_matches = engine.match(text)
+        hard_blocks = [m for m in rule_matches if m.action == "block"]
+        if hard_blocks:
+            # Preserve existing output keys and add rule info.
+            return {
+                "is_safe": False,
+                "flags": [
+                    {
+                        "safeguard": "rules",
+                        "label": m.tag,
+                        "confidence": 1.0,
+                    }
+                    for m in hard_blocks
+                ],
+                "average_confidence": 1.0,
+                "individual_results": {
+                    "rules": {
+                        "label": "block",
+                        "confidence": 1.0,
+                        "matches": [m.__dict__ for m in rule_matches],
+                    }
+                },
+                "rule_matches": [m.__dict__ for m in rule_matches],
+            }
+
     results = run_all_safeguards(text)
-    return aggregate_results(results, threshold)
+    aggregated = aggregate_results(results, threshold)
+    if rule_matches:
+        aggregated["rule_matches"] = [m.__dict__ for m in rule_matches]
+        aggregated.setdefault("individual_results", {})["rules"] = {
+            "label": "tag",
+            "confidence": 1.0,
+            "matches": [m.__dict__ for m in rule_matches],
+        }
+    return aggregated
 
 
 if __name__ == "__main__":

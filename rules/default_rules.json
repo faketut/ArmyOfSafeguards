@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "block_creditcard_pan",
+      "type": "regex",
+      "pattern": "\\\\b(?:\\\\d[ -]*?){13,19}\\\\b",
+      "case_insensitive": false,
+      "action": "tag",
+      "risk_name": "privacy",
+      "tag": "possible_pan"
+    },
+    {
+      "id": "block_password_dump",
+      "type": "keyword",
+      "pattern": "password dump",
+      "case_insensitive": true,
+      "action": "tag",
+      "risk_name": "privacy",
+      "tag": "password_dump"
+    },
+    {
+      "id": "block_bomb_recipe",
+      "type": "regex",
+      "pattern": "(?:how to|tutorial|guide).*?(?:make|build).*?(?:bomb|explosive)",
+      "case_insensitive": true,
+      "action": "block",
+      "risk_name": "violence",
+      "tag": "bomb_instructions"
+    }
+  ]
+}
+

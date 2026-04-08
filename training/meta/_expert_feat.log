@@ -1,0 +1,9 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Loading weights:   0%|          | 0/106 [00:00<?, ?it/s]Loading weights:  92%|█████████▏| 98/106 [00:00<00:00, 979.90it/s]Loading weights: 100%|██████████| 106/106 [00:00<00:00, 1034.02it/s]
+/usr/local/lib/python3.10/dist-packages/torch/cuda/__init__.py:180: UserWarning: CUDA initialization: The NVIDIA driver on your system is too old (found version 12080). Please update your GPU driver by downloading and installing a new version from the URL: http://www.nvidia.com/Download/index.aspx Alternatively, go to: https://pytorch.org to install a PyTorch version that has been compiled with your version of the CUDA driver. (Triggered internally at /pytorch/c10/cuda/CUDAFunctions.cpp:119.)
+  return torch._C._cuda_getDeviceCount() > 0
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:  60%|█████▉    | 121/202 [00:00<00:00, 1208.62it/s]Loading weights: 100%|██████████| 202/202 [00:00<00:00, 1214.98it/s]
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:  44%|████▎     | 88/202 [00:00<00:00, 865.29it/s]Loading weights: 100%|██████████| 202/202 [00:00<00:00, 1009.01it/s]
+Loading weights:   0%|          | 0/202 [00:00<?, ?it/s]Loading weights:  55%|█████▍    | 111/202 [00:00<00:00, 1096.38it/s]Loading weights: 100%|██████████| 202/202 [00:00<00:00, 1141.45it/s]
+Wrote 24 rows to training/meta/seed_meta_train_with_experts.jsonl
+EXIT:0

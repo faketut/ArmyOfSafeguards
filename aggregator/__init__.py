@@ -1,0 +1,2 @@
+"""Aggregator package for ArmyOfSafeguards."""
+

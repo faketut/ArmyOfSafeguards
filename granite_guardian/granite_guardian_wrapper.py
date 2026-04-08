@@ -12,6 +12,7 @@ import os
 import re
 from typing import Dict, Any, Optional, Tuple
 import warnings
+from wrappers.logging_utils import get_logger
 
 # Try to import required dependencies
 try:
@@ -49,6 +50,8 @@ RISKY_TOKEN = "yes"  # "yes" means unsafe
 _model = None
 _tokenizer = None
 _pipeline = None
+_log = get_logger("granite_guardian_wrapper")
+_load_error: Optional[str] = None
 
 
 def _parse_response(response: str) -> Tuple[Optional[str], Optional[str]]:
@@ -80,56 +83,76 @@ def _parse_response(response: str) -> Tuple[Optional[str], Optional[str]]:
 def _load_model_vllm(device: str = "cuda"):
     """Load model using vLLM (faster inference)."""
     global _model, _tokenizer
+    global _load_error
+
+    if _load_error is not None:
+        raise RuntimeError(_load_error)
     
     if _model is not None and _tokenizer is not None:
         return _model, _tokenizer
     
     if not VLLM_AVAILABLE:
-        raise ImportError("vLLM not available. Install with: pip install vllm")
-    
-    print(f"Loading Granite Guardian model using vLLM...")
+        _load_error = "vLLM not available. Install with: pip install vllm"
+        raise ImportError(_load_error)
     
     # Load tokenizer
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    try:
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    except Exception as e:
+        _load_error = f"{type(e).__name__}: {e}"
+        raise
     
     # Load model with vLLM
-    _model = LLM(
-        model=MODEL_NAME,
-        tensor_parallel_size=1,
-        trust_remote_code=True
-    )
+    try:
+        _model = LLM(
+            model=MODEL_NAME,
+            tensor_parallel_size=1,
+            trust_remote_code=True
+        )
+    except Exception as e:
+        _load_error = f"{type(e).__name__}: {e}"
+        raise
     
-    print("✅ Model loaded successfully")
     return _model, _tokenizer
 
 
 def _load_model_pipeline(device: str = "cuda"):
     """Load model using transformers pipeline (fallback if vLLM not available)."""
     global _pipeline, _tokenizer
+    global _load_error
+
+    if _load_error is not None:
+        raise RuntimeError(_load_error)
     
     if _pipeline is not None and _tokenizer is not None:
         return _pipeline, _tokenizer
     
     if not PIPELINE_AVAILABLE:
-        raise ImportError("transformers pipeline not available. Install with: pip install transformers")
-    
-    print(f"Loading Granite Guardian model using transformers pipeline...")
+        _load_error = "transformers pipeline not available. Install with: pip install transformers"
+        raise ImportError(_load_error)
     
     # Load tokenizer
-    _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    try:
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    except Exception as e:
+        _load_error = f"{type(e).__name__}: {e}"
+        raise
     
     # Load model with pipeline
     device_map = "auto" if device == "cuda" and torch.cuda.is_available() else "cpu"
-    _pipeline = pipeline(
-        "text-generation",
-        model=MODEL_NAME,
-        tokenizer=_tokenizer,
-        device_map=device_map,
-        trust_remote_code=True,
-        torch_dtype=torch.float16 if device == "cuda" and torch.cuda.is_available() else torch.float32
-    )
+    try:
+        _pipeline = pipeline(
+            "text-generation",
+            model=MODEL_NAME,
+            tokenizer=_tokenizer,
+            device_map=device_map,
+            trust_remote_code=True,
+            torch_dtype=torch.float16 if device == "cuda" and torch.cuda.is_available() else torch.float32
+        )
+    except Exception as e:
+        _load_error = f"{type(e).__name__}: {e}"
+        raise
     
-    print("✅ Model loaded successfully")
     return _pipeline, _tokenizer
 
 
@@ -148,7 +171,7 @@ def _load_model(device: str = "cuda", prefer_vllm: bool = True):
         try:
             return _load_model_vllm(device)
         except Exception as e:
-            warnings.warn(f"Failed to load with vLLM: {e}. Falling back to transformers pipeline.")
+            _log.warning("Failed to load with vLLM (%s). Falling back to transformers pipeline.", e)
             return _load_model_pipeline(device)
     else:
         return _load_model_pipeline(device)
@@ -166,8 +189,7 @@ def _generate_with_vllm(model, tokenizer, chat: str, think: bool = False) -> str
     )
     
     output = model.generate(chat, sampling_params, use_tqdm=False)
-    response = output[0].outputs[0].text.strip()
-    return response
+    return output[0].outputs[0].text.strip()
 
 
 def _generate_with_pipeline(pipeline, tokenizer, chat: str, think: bool = False) -> str:
@@ -189,6 +211,15 @@ def _generate_with_pipeline(pipeline, tokenizer, chat: str, think: bool = False)
         response = str(outputs)
     
     return response.strip()
+
+
+def _score_unsafe_from_score_token(score: Optional[str]) -> float:
+    # "yes" = unsafe, "no" = safe
+    if score == RISKY_TOKEN:
+        return 1.0
+    if score == SAFE_TOKEN:
+        return 0.0
+    return 0.5
 
 
 def evaluate_text(
@@ -228,16 +259,17 @@ def evaluate_text(
             - score: Raw score from model ("yes" or "no")
             - trace: Reasoning trace (if think_mode enabled)
     """
+    from wrappers.utils import apply_triage, get_effective_device, safe_error_result
+
+    effective_device = get_effective_device(device)
+
     # Check dependencies
     if not TRANSFORMERS_AVAILABLE:
-        return {
-            "is_safe": True,
-            "average_confidence": 0.0,
-            "flags": [],
-            "individual_results": {"error": "transformers not available"},
-            "score": None,
-            "trace": None
-        }
+        return safe_error_result(
+            wrapper_name="granite_guardian",
+            reason="transformers not available",
+            threshold=threshold,
+        )
     
     # Validate criteria
     valid_criteria = ["jailbreak", "profanity", "function_call", "groundedness"]
@@ -256,7 +288,7 @@ def evaluate_text(
     
     try:
         # Load model (lazy loading)
-        model, tokenizer = _load_model(device=device, prefer_vllm=True)
+        model, tokenizer = _load_model(device=effective_device, prefer_vllm=True)
         
         # Prepare messages
         messages = [{"role": "user", "content": text}]
@@ -298,60 +330,34 @@ def evaluate_text(
         
         # Parse response
         score, trace = _parse_response(response_text)
-        
-        # Convert score to safety assessment
-        # "yes" = unsafe, "no" = safe
-        is_unsafe = (score == RISKY_TOKEN)
-        is_safe = not is_unsafe
-        
-        # Calculate confidence
-        # For Granite Guardian, we use binary confidence:
-        # - If unsafe (yes): confidence = 1.0
-        # - If safe (no): confidence = 0.0
-        # This is a simplification; in practice, you might want to extract
-        # logprobs or use the model's confidence scores if available
-        confidence = 1.0 if is_unsafe else 0.0
-        
-        # Create flags list
-        flags = []
-        if is_unsafe:
-            flags.append({
-                "safeguard": "granite_guardian",
-                "criteria": criteria,
-                "score": score,
-                "confidence": confidence
-            })
-        
-        # Prepare individual results
-        individual_results = {
-            "granite_guardian": {
-                "criteria": criteria,
-                "score": score,
-                "is_safe": is_safe,
-                "confidence": confidence,
-                "trace": trace if think_mode else None
-            }
-        }
-        
-        return {
-            "is_safe": is_safe,
-            "average_confidence": confidence,
-            "flags": flags,
-            "individual_results": individual_results,
+
+        score_unsafe = _score_unsafe_from_score_token(score)
+        payload = {
+            "criteria": criteria,
             "score": score,
-            "trace": trace
+            "trace": trace if think_mode else None,
+            "device": effective_device,
+            "model": MODEL_NAME,
+            "score_unsafe": float(score_unsafe),
         }
+
+        out = apply_triage(
+            wrapper_name="granite_guardian",
+            score_unsafe=float(score_unsafe),
+            threshold=threshold,
+            individual_payload=payload,
+        )
+        out["score"] = score
+        out["trace"] = trace
+        return out
         
     except Exception as e:
-        warnings.warn(f"Error evaluating text with Granite Guardian: {e}")
-        return {
-            "is_safe": True,  # Default to safe on error
-            "average_confidence": 0.0,
-            "flags": [],
-            "individual_results": {"error": str(e)},
-            "score": None,
-            "trace": None
-        }
+        _log.warning("Granite Guardian evaluate_text failed: %s", e)
+        return safe_error_result(
+            wrapper_name="granite_guardian",
+            reason=f"{type(e).__name__}: {e}",
+            threshold=threshold,
+        )
 
 
 if __name__ == "__main__":

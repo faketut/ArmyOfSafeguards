@@ -20,6 +20,8 @@ from tqdm import tqdm
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
+from aggregator.expert_runner import run_all_safeguards_batch
+
 from datasets import load_dataset
 from sklearn.metrics import (
     accuracy_score,
@@ -42,6 +44,13 @@ try:
 except ImportError:
     WEIGHTED_AGGREGATOR_AVAILABLE = False
     evaluate_text_weighted = None
+
+try:
+    from aggregator.meta_aggregator import evaluate_text as evaluate_text_meta
+    META_AGGREGATOR_AVAILABLE = True
+except ImportError:
+    META_AGGREGATOR_AVAILABLE = False
+    evaluate_text_meta = None
 
 try:
     from granite_guardian.granite_guardian_wrapper import evaluate_text as evaluate_text_granite
@@ -534,7 +543,7 @@ def get_evaluate_function(aggregator_type: str = 'weighted'):
     Get the evaluate_text function for the specified aggregator type.
     
     Args:
-        aggregator_type: 'base', 'weighted', 'granite', or 'shieldgemma'
+        aggregator_type: 'base', 'weighted', 'meta', 'granite', or 'shieldgemma'
         
     Returns:
         The evaluate_text function
@@ -547,6 +556,10 @@ def get_evaluate_function(aggregator_type: str = 'weighted'):
         if not WEIGHTED_AGGREGATOR_AVAILABLE:
             raise ValueError("Weighted aggregator not available")
         return evaluate_text_weighted
+    elif aggregator_type == 'meta':
+        if not META_AGGREGATOR_AVAILABLE:
+            raise ValueError("Meta aggregator not available")
+        return evaluate_text_meta
     elif aggregator_type == 'granite':
         if not GRANITE_AVAILABLE:
             raise ValueError("Granite Guardian not available. Install dependencies: pip install transformers torch vllm")
@@ -556,7 +569,156 @@ def get_evaluate_function(aggregator_type: str = 'weighted'):
             raise ValueError("ShieldGemma not available. Install dependencies: pip install transformers[accelerate] torch")
         return evaluate_text_shieldgemma
     else:
-        raise ValueError(f"Unknown aggregator type: {aggregator_type}. Must be 'base', 'weighted', 'granite', or 'shieldgemma'")
+        raise ValueError(f"Unknown aggregator type: {aggregator_type}. Must be 'base', 'weighted', 'meta', 'granite', or 'shieldgemma'")
+
+
+def _binary_prediction_from_individual(
+    ind: Dict[str, Any],
+    aggregator: str,
+    threshold: float,
+) -> str:
+    """Map per-text expert outputs to safe/unsafe (matches evaluate_on_benchmark batched paths)."""
+    if aggregator == "weighted":
+        from aggregator.weighted_aggregator import aggregate_results as _agg
+
+        result = _agg(ind, threshold=threshold)
+        return "unsafe" if not result["is_safe"] else "safe"
+    if aggregator == "base":
+        from aggregator.base_aggregator import aggregate_results as _agg
+
+        result = _agg(ind, threshold=threshold)
+        return "unsafe" if not result["is_safe"] else "safe"
+    if aggregator == "meta":
+        from meta_classifier.predict import meta_predict_proba
+        from policy.triage import TriageConfig, triage_score
+        from policy.dynamic_threshold import context_from_dict
+
+        try:
+            p_unsafe = meta_predict_proba(ind)
+        except Exception:
+            p_unsafe = 0.5
+        cfg = TriageConfig.from_env(default_threshold=threshold)
+        verdict, _ = triage_score(p_unsafe, config=cfg, ctx=context_from_dict(None))
+        is_safe = verdict == "safe"
+        return "unsafe" if not is_safe else "safe"
+    raise ValueError(f"compare mode only supports base, weighted, meta; got {aggregator}")
+
+
+def _metrics_binary(y_true: List[str], y_pred: List[str]) -> Dict[str, Any]:
+    acc = accuracy_score(y_true, y_pred)
+    precision, recall, f1, _ = precision_recall_fscore_support(
+        y_true,
+        y_pred,
+        average="binary",
+        pos_label="unsafe",
+        zero_division=0,
+    )
+    return {
+        "accuracy": float(acc),
+        "precision": float(precision),
+        "recall": float(recall),
+        "f1_score": float(f1),
+    }
+
+
+def evaluate_compare_aggregators(
+    benchmark_name: str,
+    limit: Optional[int] = None,
+    threshold: float = 0.5,
+    verbose: bool = True,
+    hf_token: Optional[str] = None,
+    config_override: Optional[str] = None,
+    batch_size: int = 8,
+) -> Dict[str, Any]:
+    """
+    Run base, weighted, and meta aggregators on the same benchmark examples (one expert pass).
+
+    Per-domain metrics use metadata['domain'] when present; otherwise the benchmark name is used.
+    """
+    aggs = ["base", "weighted", "meta"]
+    if not BASE_AGGREGATOR_AVAILABLE:
+        aggs = [a for a in aggs if a != "base"]
+    if not WEIGHTED_AGGREGATOR_AVAILABLE:
+        aggs = [a for a in aggs if a != "weighted"]
+    if not META_AGGREGATOR_AVAILABLE:
+        aggs = [a for a in aggs if a != "meta"]
+    if not aggs:
+        return {"benchmark": benchmark_name, "error": "No aggregators available for compare"}
+
+    if verbose:
+        print(f"\n{'='*70}")
+        print(f"Compare aggregators on: {benchmark_name}")
+        print(f"Aggregators: {', '.join(aggs)}")
+        print(f"{BENCHMARKS[benchmark_name].get('note', '')}")
+        print(f"{'='*70}")
+
+    try:
+        eval_config = BENCHMARKS[benchmark_name].copy()
+        if config_override:
+            eval_config["config"] = config_override
+        texts, ground_truth_labels, metadata = load_benchmark_dataset(
+            benchmark_name, limit, hf_token, config_override=eval_config if config_override else None
+        )
+        if len(texts) == 0:
+            return {"benchmark": benchmark_name, "error": "No examples loaded from dataset"}
+
+        if verbose:
+            print(f"Loaded {len(texts)} examples; running experts once (batched)...")
+
+        batched_individuals = run_all_safeguards_batch(texts, batch_size=batch_size)
+
+        domains: List[str] = []
+        for m in metadata:
+            if isinstance(m, dict) and m.get("domain"):
+                domains.append(str(m["domain"]))
+            else:
+                domains.append(benchmark_name)
+
+        results_by_agg: Dict[str, Any] = {}
+        for agg in tqdm(aggs, disable=not verbose, desc="Aggregators"):
+            preds = [_binary_prediction_from_individual(ind, agg, threshold) for ind in batched_individuals]
+            overall = _metrics_binary(ground_truth_labels, preds)
+            overall["n"] = len(preds)
+            by_domain: Dict[str, Any] = {}
+            for dom in sorted(set(domains)):
+                idx = [i for i, d in enumerate(domains) if d == dom]
+                if not idx:
+                    continue
+                yt = [ground_truth_labels[i] for i in idx]
+                yp = [preds[i] for i in idx]
+                by_domain[dom] = {**_metrics_binary(yt, yp), "n": len(idx)}
+            results_by_agg[agg] = {"overall": overall, "by_domain": by_domain}
+
+        if verbose:
+            print(f"\n{'='*70}")
+            print("Comparison (overall)")
+            print(f"{'Aggregator':<12} {'Acc':>8} {'P':>8} {'R':>8} {'F1':>8}")
+            print("-" * 50)
+            for agg in aggs:
+                o = results_by_agg[agg]["overall"]
+                print(
+                    f"{agg:<12} {o['accuracy']:>7.2%} {o['precision']:>7.2%} "
+                    f"{o['recall']:>7.2%} {o['f1_score']:>7.2%}"
+                )
+            print(f"\nPer-domain F1 (by aggregator):")
+            for dom in sorted(set(domains)):
+                parts = [f"{agg}={results_by_agg[agg]['by_domain'].get(dom, {}).get('f1_score', float('nan')):.2%}" for agg in aggs]
+                print(f"  {dom}: " + " | ".join(parts))
+
+        return {
+            "benchmark": benchmark_name,
+            "timestamp": datetime.now().isoformat(),
+            "threshold": threshold,
+            "aggregators": aggs,
+            "total_examples": len(texts),
+            "results": results_by_agg,
+        }
+    except Exception as e:
+        if verbose:
+            print(f"⚠️  Error in compare mode: {e}")
+        import traceback
+
+        return {"benchmark": benchmark_name, "error": str(e), "traceback": traceback.format_exc()}
 
 
 def evaluate_on_benchmark(
@@ -576,7 +738,7 @@ def evaluate_on_benchmark(
         limit: Maximum number of examples to evaluate
         threshold: Confidence threshold for flagging
         verbose: Whether to print progress
-        aggregator: Aggregator type to use ('base', 'weighted', 'granite', or 'shieldgemma', default: 'weighted')
+        aggregator: Aggregator type to use ('base', 'weighted', 'meta', 'granite', or 'shieldgemma', default: 'weighted')
         
     Returns:
         Dictionary with evaluation results
@@ -627,22 +789,72 @@ def evaluate_on_benchmark(
         predictions = []
         confidences = []
         individual_results = []
-        
-        for text in tqdm(texts, disable=not verbose, desc=f"Evaluating ({aggregator})"):
-            result = evaluate_func(text, threshold=threshold)
-            
-            # Determine if content was flagged as unsafe
-            is_flagged = not result['is_safe']
-            predictions.append("unsafe" if is_flagged else "safe")
-            
-            # Store average confidence
-            confidences.append(result.get('average_confidence', 0.0))
-            
-            # Store individual safeguard results
-            individual_results.append({
-                'flags': result.get('flags', []),
-                'individual_results': result.get('individual_results', {})
-            })
+        verdicts = []
+
+        # Optional batched expert inference for throughput (weighted/meta/base only).
+        batch_enable = os.environ.get("AOS_BENCH_BATCH", "").strip() in {"1", "true", "TRUE", "yes", "YES"}
+        batch_size = int(os.environ.get("AOS_BENCH_BATCH_SIZE", "8") or "8")
+
+        if batch_enable and aggregator in {"weighted", "meta", "base"}:
+            # Run experts in batches, then apply aggregator logic per example.
+            batched_individuals = run_all_safeguards_batch(texts, batch_size=batch_size)
+
+            if aggregator == "weighted":
+                from aggregator.weighted_aggregator import aggregate_results as _agg
+                for ind in tqdm(batched_individuals, disable=not verbose, desc=f"Aggregating ({aggregator})"):
+                    result = _agg(ind, threshold=threshold)
+                    predictions.append("unsafe" if not result["is_safe"] else "safe")
+                    verdicts.append(result.get("verdict", "safe" if result.get("is_safe") else "unsafe"))
+                    confidences.append(result.get("average_confidence", 0.0))
+                    individual_results.append({"flags": result.get("flags", []), "individual_results": result.get("individual_results", {})})
+            elif aggregator == "base":
+                from aggregator.base_aggregator import aggregate_results as _agg
+                for ind in tqdm(batched_individuals, disable=not verbose, desc=f"Aggregating ({aggregator})"):
+                    result = _agg(ind, threshold=threshold)
+                    predictions.append("unsafe" if not result["is_safe"] else "safe")
+                    verdicts.append(result.get("verdict", "safe" if result.get("is_safe") else "unsafe"))
+                    confidences.append(result.get("average_confidence", 0.0))
+                    individual_results.append({"flags": result.get("flags", []), "individual_results": result.get("individual_results", {})})
+            else:  # meta
+                from meta_classifier.predict import meta_predict_proba
+                from policy.triage import TriageConfig, triage_score
+                from policy.dynamic_threshold import context_from_dict
+
+                cfg = TriageConfig.from_env(default_threshold=threshold)
+                for ind in tqdm(batched_individuals, disable=not verbose, desc=f"Aggregating ({aggregator})"):
+                    try:
+                        p_unsafe = meta_predict_proba(ind)
+                    except Exception:
+                        p_unsafe = 0.5
+                    verdict, triage = triage_score(p_unsafe, config=cfg, ctx=context_from_dict(None))
+                    is_safe = verdict == "safe"
+                    result = {
+                        "is_safe": is_safe,
+                        "average_confidence": float(p_unsafe),
+                        "verdict": verdict,
+                        "triage": triage,
+                        "flags": ([] if is_safe else [{"safeguard": "meta", "label": verdict, "confidence": float(p_unsafe)}]),
+                        "individual_results": ind,
+                    }
+                    predictions.append("unsafe" if not is_safe else "safe")
+                    verdicts.append(verdict)
+                    confidences.append(result["average_confidence"])
+                    individual_results.append({"flags": result.get("flags", []), "individual_results": result.get("individual_results", {})})
+        else:
+            # Default per-example path
+            for text in tqdm(texts, disable=not verbose, desc=f"Evaluating ({aggregator})"):
+                result = evaluate_func(text, threshold=threshold)
+
+                is_flagged = not result['is_safe']
+                predictions.append("unsafe" if is_flagged else "safe")
+                verdicts.append(result.get("verdict", "safe" if result.get("is_safe") else "unsafe"))
+
+                confidences.append(result.get('average_confidence', 0.0))
+
+                individual_results.append({
+                    'flags': result.get('flags', []),
+                    'individual_results': result.get('individual_results', {})
+                })
         
         # Calculate metrics
         accuracy = accuracy_score(ground_truth_labels, predictions)
@@ -712,6 +924,18 @@ def evaluate_on_benchmark(
                 }
             }
         }
+
+        # Gray-zone triage stats (if aggregators provide verdict)
+        needs_review = sum(1 for v in verdicts if v == "needs_review")
+        results["triage"] = {
+            "needs_review": int(needs_review),
+            "review_rate": float(needs_review / len(verdicts)) if verdicts else 0.0,
+            "verdict_counts": {
+                "safe": int(sum(1 for v in verdicts if v == "safe")),
+                "unsafe": int(sum(1 for v in verdicts if v == "unsafe")),
+                "needs_review": int(needs_review),
+            },
+        }
         
         if verbose:
             print(f"\n{'='*70}")
@@ -737,6 +961,9 @@ def evaluate_on_benchmark(
             print(f"\n  Per-Class Metrics:")
             print(f"    Safe - Precision: {precision_per_class[0]:.2%}, Recall: {recall_per_class[0]:.2%}, F1: {f1_per_class[0]:.2%}")
             print(f"    Unsafe - Precision: {precision_per_class[1]:.2%}, Recall: {recall_per_class[1]:.2%}, F1: {f1_per_class[1]:.2%}")
+            if results.get("triage"):
+                print(f"\n  Triage (gray-zone) Stats:")
+                print(f"    Needs review: {results['triage']['needs_review']} ({results['triage']['review_rate']:.2%})")
         
         return results
         
@@ -909,6 +1136,11 @@ Examples:
         help="Don't save results to JSON file"
     )
     parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress progress output (sets verbose=False)"
+    )
+    parser.add_argument(
         "--hf-token",
         type=str,
         default=None,
@@ -923,9 +1155,14 @@ Examples:
     parser.add_argument(
         "--aggregator",
         type=str,
-        choices=['base', 'weighted', 'granite', 'shieldgemma'],
+        choices=['base', 'weighted', 'meta', 'granite', 'shieldgemma'],
         default='weighted',
-        help="Aggregator type to use: 'base' (threshold-based), 'weighted' (weighted sum, default), 'granite' (IBM Granite Guardian), or 'shieldgemma' (Google ShieldGemma-2b)"
+        help="Aggregator type to use: 'base' (threshold-based), 'weighted' (weighted sum, default), 'meta' (learned LR meta-classifier), 'granite' (IBM Granite Guardian), or 'shieldgemma' (Google ShieldGemma-2b)"
+    )
+    parser.add_argument(
+        "--compare-aggregators",
+        action="store_true",
+        help="On a single benchmark, run base vs weighted vs meta on the same examples (one expert pass) and print per-domain F1",
     )
     
     args = parser.parse_args()
@@ -939,29 +1176,47 @@ Examples:
     if args.benchmark and args.all:
         parser.error("Cannot specify both --benchmark and --all")
     
+    if args.compare_aggregators and args.all:
+        parser.error("Cannot use --compare-aggregators with --all")
+
     if args.benchmark:
-        # Run single benchmark
-        result = evaluate_on_benchmark(
-            args.benchmark,
-            limit=args.limit,
-            threshold=args.threshold,
-            verbose=True,
-            hf_token=hf_token,
-            config_override=args.config,
-            aggregator=args.aggregator
-        )
+        if args.compare_aggregators:
+            result = evaluate_compare_aggregators(
+                args.benchmark,
+                limit=args.limit,
+                threshold=args.threshold,
+                verbose=not args.quiet,
+                hf_token=hf_token,
+                config_override=args.config,
+            )
+        else:
+            # Run single benchmark
+            result = evaluate_on_benchmark(
+                args.benchmark,
+                limit=args.limit,
+                threshold=args.threshold,
+                verbose=not args.quiet,
+                hf_token=hf_token,
+                config_override=args.config,
+                aggregator=args.aggregator
+            )
         
         if not args.no_save and "error" not in result:
             output_dir = Path(__file__).parent
-            output_file = output_dir / f"benchmark_{args.benchmark.lower()}_{args.aggregator}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            suffix = "compare" if args.compare_aggregators else args.aggregator
+            output_file = output_dir / f"benchmark_{args.benchmark.lower()}_{suffix}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             with open(output_file, 'w') as f:
-                json.dump({
+                payload: Dict[str, Any] = {
                     "timestamp": datetime.now().isoformat(),
                     "system": "Army of Safeguards (Aggregator)",
-                    "aggregator": args.aggregator,
                     "threshold": args.threshold,
-                    "result": result
-                }, f, indent=2)
+                    "result": result,
+                }
+                if not args.compare_aggregators:
+                    payload["aggregator"] = args.aggregator
+                else:
+                    payload["mode"] = "compare_aggregators"
+                json.dump(payload, f, indent=2)
             print(f"\n✅ Results saved to: {output_file}")
     else:
         # Run all benchmarks

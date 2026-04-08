@@ -13,7 +13,8 @@ python aggregator/aggregator.py "Your text to evaluate here"
 ### Python API
 
 ```python
-from aggregator.aggregator import evaluate_text, run_all_safeguards
+from aggregator.aggregator import evaluate_text
+from aggregator.expert_runner import run_all_safeguards
 
 # Run all safeguards and get aggregated result
 result = evaluate_text("Your text here", threshold=0.7)
@@ -34,10 +35,10 @@ print(individual_results)
 
 ## Adding New Safeguards
 
-When a new safeguard is added to the repo (e.g., `toxicity/safeguard_toxicity.py`):
+When a new safeguard is added to the repo (e.g., `experts/toxicity.py`):
 
-1. Import it in `aggregator.py`
-2. Add it to the `run_all_safeguards()` function
+1. Add it under `experts/`
+2. Import it in `aggregator/expert_runner.py`
 3. The aggregator will automatically include it in evaluations
 
 ## Configuration
