@@ -173,23 +173,34 @@ def main() -> int:
     out_dir = Path(args.output_dir)
     out_dir.parent.mkdir(parents=True, exist_ok=True)
 
-    targs = TrainingArguments(
-        output_dir=str(out_dir),
-        learning_rate=float(args.lr),
-        per_device_train_batch_size=int(args.batch),
-        per_device_eval_batch_size=int(args.batch),
-        gradient_accumulation_steps=int(args.grad_accum),
-        num_train_epochs=float(args.epochs),
-        evaluation_strategy="epoch",
-        save_strategy="epoch",
-        load_best_model_at_end=True,
-        metric_for_best_model="roc_auc",
-        greater_is_better=True,
-        logging_steps=50,
-        seed=int(args.seed),
-        fp16=bool(args.fp16),
-        report_to=[],
-    )
+    def _make_training_args() -> TrainingArguments:
+        """
+        transformers has renamed/deprecated `evaluation_strategy` -> `eval_strategy` in newer versions.
+        Keep compatibility by trying the older arg first, then falling back.
+        """
+        common = dict(
+            output_dir=str(out_dir),
+            learning_rate=float(args.lr),
+            per_device_train_batch_size=int(args.batch),
+            per_device_eval_batch_size=int(args.batch),
+            gradient_accumulation_steps=int(args.grad_accum),
+            num_train_epochs=float(args.epochs),
+            save_strategy="epoch",
+            load_best_model_at_end=True,
+            metric_for_best_model="roc_auc",
+            greater_is_better=True,
+            logging_steps=50,
+            seed=int(args.seed),
+            fp16=bool(args.fp16),
+            report_to=[],
+        )
+        try:
+            return TrainingArguments(evaluation_strategy="epoch", **common)
+        except TypeError:
+            # Newer transformers
+            return TrainingArguments(eval_strategy="epoch", **common)
+
+    targs = _make_training_args()
 
     trainer = WeightedTrainer(
         model=model,
