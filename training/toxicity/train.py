@@ -345,6 +345,11 @@ def main() -> int:
         transformers has renamed/deprecated `evaluation_strategy` -> `eval_strategy` in newer versions.
         Keep compatibility by trying the older arg first, then falling back.
         """
+        # Convert warmup_ratio -> warmup_steps to avoid future deprecations.
+        steps_per_epoch = int(np.ceil(len(ds_tok["train"]) / max(1, int(args.batch) * int(args.grad_accum))))
+        total_steps = int(np.ceil(steps_per_epoch * float(args.epochs)))
+        warmup_steps = int(np.floor(max(0.0, min(1.0, float(args.warmup_ratio))) * total_steps))
+
         common = dict(
             output_dir=str(out_dir),
             learning_rate=float(args.lr),
@@ -354,7 +359,7 @@ def main() -> int:
             gradient_accumulation_steps=int(args.grad_accum),
             num_train_epochs=float(args.epochs),
             lr_scheduler_type=str(args.lr_scheduler),
-            warmup_ratio=float(args.warmup_ratio),
+            warmup_steps=int(warmup_steps),
             save_strategy="epoch",
             load_best_model_at_end=True,
             metric_for_best_model="roc_auc",
