@@ -136,7 +136,13 @@ def main() -> int:
     if len(ds_all) < 100:
         raise SystemExit(f"not enough rows after filtering: {len(ds_all)}")
 
-    split = ds_all.train_test_split(test_size=1.0 - float(args.train_ratio), seed=int(args.seed), stratify_by_column="label")
+    # Hugging Face datasets only supports `stratify_by_column` for ClassLabel columns.
+    ds_all = ds_all.class_encode_column("label")
+    split = ds_all.train_test_split(
+        test_size=1.0 - float(args.train_ratio),
+        seed=int(args.seed),
+        stratify_by_column="label",
+    )
     ds = DatasetDict(train=split["train"], valid=split["test"])
 
     tok = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
