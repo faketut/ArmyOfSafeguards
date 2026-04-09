@@ -23,7 +23,7 @@ from transformers import (
 
 
 SEED = 42
-DEFAULT_BASE_MODEL = "distilroberta-base"
+DEFAULT_BASE_MODEL = "microsoft/deberta-v3-base"
 
 # Ensure repo root import works when executed as a script from any cwd (e.g. Colab).
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -33,6 +33,33 @@ def _seed_everything(seed: int) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
+
+
+def _pick_lora_target_modules(model) -> List[str]:
+    """
+    Pick LoRA target module name fragments that actually exist in `model`.
+
+    Different backbones use different names:
+    - RoBERTa/DistilRoBERTa: query/value
+    - DeBERTa-v3: query_proj/value_proj
+    """
+    names = [n for n, _ in model.named_modules()]
+
+    def _has(fragment: str) -> bool:
+        frag = "." + fragment
+        return any(frag in n for n in names)
+
+    if _has("query_proj") and _has("value_proj"):
+        return ["query_proj", "value_proj"]
+    if _has("query") and _has("value"):
+        return ["query", "value"]
+    if _has("q_proj") and _has("v_proj"):
+        return ["q_proj", "v_proj"]
+
+    # Fallback: allow a broader set if present.
+    candidates = ["in_proj", "out_proj", "dense"]
+    found = [c for c in candidates if _has(c)]
+    return found
 
 
 def _parse_label(v: Any) -> int:
@@ -275,13 +302,19 @@ def main() -> int:
         except Exception as e:
             raise SystemExit("LoRA requested but `peft` is not installed. Install with: pip install peft") from e
 
-        # RoBERTa-style attention modules usually contain "query"/"value" linear layers.
+        target_modules = _pick_lora_target_modules(model)
+        if not target_modules:
+            raise SystemExit(
+                "LoRA could not find any target_modules in this backbone. "
+                "Try without --lora, or extend _pick_lora_target_modules for this model."
+            )
+
         lora_cfg = LoraConfig(
             task_type=TaskType.SEQ_CLS,
             r=int(args.lora_r),
             lora_alpha=int(args.lora_alpha),
             lora_dropout=float(args.lora_dropout),
-            target_modules=["query", "value"],
+            target_modules=target_modules,
         )
         model = get_peft_model(model, lora_cfg)
 
