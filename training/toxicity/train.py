@@ -207,7 +207,6 @@ def main() -> int:
         args=targs,
         train_dataset=ds_tok["train"],
         eval_dataset=ds_tok["valid"],
-        tokenizer=tok,
         data_collator=collator,
         compute_metrics=_compute_metrics,
         class_weights=class_weights,
