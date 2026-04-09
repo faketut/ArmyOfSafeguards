@@ -6,7 +6,7 @@ import os
 import random
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -109,7 +109,13 @@ def _compute_metrics(eval_pred) -> Dict[str, float]:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Fine-tune toxicity expert on teacher-labeled meta JSONL")
-    ap.add_argument("--data", type=str, required=True, help="teacher_all_for_meta.jsonl (or similar)")
+    ap.add_argument("--data", type=str, default="", help="Meta JSONL (teacher-labeled) with text+label (optional if --hf-manifest is used)")
+    ap.add_argument(
+        "--hf-manifest",
+        type=str,
+        default="",
+        help="Optional JSON manifest with HF dataset entries (uses native labels via training/meta/build_meta_from_hf_labels.py mapping).",
+    )
     ap.add_argument("--domain", type=str, default="toxicity", help="Domain filter (default: toxicity)")
     ap.add_argument("--text-field", type=str, default="text")
     ap.add_argument("--label-field", type=str, default="label")
@@ -123,16 +129,85 @@ def main() -> int:
     ap.add_argument("--grad-accum", type=int, default=1)
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--class-weight", type=str, choices=["none", "balanced"], default="balanced")
+    ap.add_argument(
+        "--target-train-pos-rate",
+        type=float,
+        default=0.0,
+        help="If >0, resample TRAIN split to reach this positive rate by downsampling negatives (0 disables).",
+    )
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
 
     _seed_everything(int(args.seed))
 
-    rows = _load_teacher_jsonl(Path(args.data), domain=args.domain)
-    if not rows:
-        raise SystemExit("no rows loaded for domain")
+    dom = str(args.domain or "").strip().lower()
 
-    ds_all = _to_dataset(rows, text_field=args.text_field, label_field=args.label_field)
+    rows: List[Dict[str, Any]] = []
+    if args.hf_manifest.strip():
+        # Build a toxicity dataset from HF sources using native labels.
+        # This avoids training a toxicity expert against a "general safety" teacher policy.
+        from datasets import load_dataset
+
+        from training.meta.build_meta_from_hf_labels import _extract_text, _map_label  # type: ignore
+
+        manifest = json.loads(Path(args.hf_manifest).read_text(encoding="utf-8"))
+        entries = manifest.get("datasets", manifest) if isinstance(manifest, dict) else manifest
+        if not isinstance(entries, list):
+            raise SystemExit("--hf-manifest must be a JSON list or an object with datasets: [...]")
+
+        for ent in entries:
+            if not isinstance(ent, dict):
+                continue
+            if str(ent.get("domain", "")).strip().lower() != dom:
+                continue
+            dataset = str(ent.get("hf_id", "") or ent.get("dataset", "")).strip()
+            if not dataset:
+                continue
+            cfg_raw = ent.get("config", None)
+            cfg = None if cfg_raw is None else (str(cfg_raw).strip() or None)
+            splits = ent.get("splits") or ent.get("split") or ["train"]
+            if isinstance(splits, str):
+                splits = [splits]
+            if not isinstance(splits, list) or not splits:
+                splits = ["train"]
+
+            limit = None
+            status = ent.get("status_in_repo")
+            if isinstance(ent.get("limit"), (int, float)):
+                limit = int(ent["limit"])
+            elif isinstance(status, dict) and isinstance(status.get("limit_used"), (int, float)):
+                limit = int(status["limit_used"])
+
+            # Load and map labels
+            for sp in splits:
+                sp = str(sp).strip() or "train"
+                ds = load_dataset(dataset, cfg, split=sp) if cfg else load_dataset(dataset, split=sp)
+                n = 0
+                for ex in ds:
+                    if limit is not None and n >= limit:
+                        break
+                    if not isinstance(ex, dict):
+                        continue
+                    text = _extract_text(dataset, ex, str(ent.get("text_field", "") or ""))  # may be ""
+                    if not text:
+                        continue
+                    unsafe = _map_label(dataset, ex)
+                    if unsafe is None:
+                        continue
+                    rows.append({"text": text, "label": "unsafe" if unsafe else "safe"})
+                    n += 1
+
+        if not rows:
+            raise SystemExit("no rows built from --hf-manifest (check domain filter and mapping)")
+        ds_all = _to_dataset(rows, text_field="text", label_field="label")
+    else:
+        if not args.data.strip():
+            raise SystemExit("Provide --data or --hf-manifest")
+        rows = _load_teacher_jsonl(Path(args.data), domain=args.domain)
+        if not rows:
+            raise SystemExit("no rows loaded for domain")
+        ds_all = _to_dataset(rows, text_field=args.text_field, label_field=args.label_field)
+
     if len(ds_all) < 100:
         raise SystemExit(f"not enough rows after filtering: {len(ds_all)}")
 
@@ -144,6 +219,25 @@ def main() -> int:
         stratify_by_column="label",
     )
     ds = DatasetDict(train=split["train"], valid=split["test"])
+
+    # Optional: downsample negatives in TRAIN to increase positive rate.
+    if args.target_train_pos_rate and float(args.target_train_pos_rate) > 0.0:
+        r = float(args.target_train_pos_rate)
+        if not (0.0 < r < 1.0):
+            raise SystemExit("--target-train-pos-rate must be in (0,1)")
+        y = np.asarray(ds["train"]["label"], dtype=np.int64)
+        pos_idx = np.where(y == 1)[0]
+        neg_idx = np.where(y == 0)[0]
+        if len(pos_idx) == 0:
+            raise SystemExit("train split has 0 positives; cannot resample")
+        # want pos/(pos+neg_keep) ~= r => neg_keep ~= pos*(1-r)/r
+        neg_keep = int(np.floor(len(pos_idx) * (1.0 - r) / r))
+        neg_keep = max(0, min(neg_keep, len(neg_idx)))
+        rng = np.random.default_rng(int(args.seed))
+        rng.shuffle(neg_idx)
+        keep_idx = np.concatenate([pos_idx, neg_idx[:neg_keep]])
+        keep_idx = rng.permutation(keep_idx)
+        ds = DatasetDict(train=ds["train"].select(keep_idx.tolist()), valid=ds["valid"])
 
     tok = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
     model = AutoModelForSequenceClassification.from_pretrained(
