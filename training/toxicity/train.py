@@ -153,6 +153,11 @@ def main() -> int:
     ap.add_argument("--text-field", type=str, default="text")
     ap.add_argument("--label-field", type=str, default="label")
     ap.add_argument("--model-name", type=str, default=DEFAULT_BASE_MODEL)
+    ap.add_argument(
+        "--use-fast-tokenizer",
+        action="store_true",
+        help="Use fast tokenizer (default: off; DeBERTa-v3 is usually more stable with slow tokenizer).",
+    )
     ap.add_argument("--max-length", type=int, default=256)
     ap.add_argument("--train-ratio", type=float, default=0.9)
     ap.add_argument("--output-dir", type=str, default="experts/artifacts/toxicity_ft")
@@ -195,6 +200,10 @@ def main() -> int:
     )
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
+    # Avoid double-correcting imbalance: resampling + class-weight often hurts ranking metrics.
+    if args.target_train_pos_rate and float(args.target_train_pos_rate) > 0.0 and args.class_weight == "balanced":
+        print("warning: both --target-train-pos-rate and --class-weight balanced set; overriding class-weight -> none")
+        args.class_weight = "none"
 
     if args.fp16 and args.bf16:
         raise SystemExit("Choose only one: --fp16 or --bf16")
@@ -300,7 +309,7 @@ def main() -> int:
         keep_idx = rng.permutation(keep_idx)
         ds = DatasetDict(train=ds["train"].select(keep_idx.tolist()), valid=ds["valid"])
 
-    tok = AutoTokenizer.from_pretrained(args.model_name, use_fast=True)
+    tok = AutoTokenizer.from_pretrained(args.model_name, use_fast=bool(args.use_fast_tokenizer))
     model = AutoModelForSequenceClassification.from_pretrained(
         args.model_name,
         num_labels=2,
