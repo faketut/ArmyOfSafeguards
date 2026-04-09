@@ -115,8 +115,10 @@ class WeightedTrainer(Trainer):
         if labels is None:
             loss = outputs.loss
         else:
+            # CrossEntropyLoss expects class weights to match logits dtype (fp16/bf16/fp32).
+            labels = labels.long()
             if self._class_weights is not None:
-                cw = self._class_weights.to(logits.device)
+                cw = self._class_weights.to(device=logits.device, dtype=logits.dtype)
                 loss_fct = torch.nn.CrossEntropyLoss(weight=cw)
             else:
                 loss_fct = torch.nn.CrossEntropyLoss()
