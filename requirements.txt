@@ -1,4 +1,5 @@
 transformers>=4.44
+accelerate
 torch
 sentencepiece
 scikit-learn
@@ -6,7 +7,7 @@ evaluate
 datasets==3.6.0
 huggingface_hub
 safetensors
-datasets
-scikit-learn
 tqdm
 pandas
+# Pillow>=10.2 for surya-ocr; marker-pdf/surya want <11. marker-pdf also pins anthropic<0.47 (conflicts with langchain-anthropic) — use a clean `aos` env or uninstall marker-pdf.
+Pillow>=10.2,<11

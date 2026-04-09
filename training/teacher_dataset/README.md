@@ -87,6 +87,31 @@ LIMIT=200 ./training/teacher_dataset/run_teacher_meta_pipeline.sh
 DRY_RUN=1 LIMIT=50 ./training/teacher_dataset/run_teacher_meta_pipeline.sh
 ```
 
+## Batch: multiple HF datasets (manifest)
+
+If you want to label **multiple** Hugging Face datasets with the **same teacher** (e.g. ShieldGemma) and merge them into one meta-training JSONL, use:
+
+```bash
+python training/teacher_dataset/label_manifest.py \
+  --manifest training/teacher_dataset/manifest.example.json \
+  --teacher shieldgemma \
+  --device cuda \
+  --threshold 0.5 \
+  --require-expert-outputs \
+  --out training/meta/teacher_all_for_meta.jsonl
+```
+
+Then train a unified meta policy:
+
+```bash
+python -m meta_classifier.train_meta \
+  --data training/meta/teacher_all_for_meta.jsonl \
+  --n-folds 5 \
+  --group-field source \
+  --calibrate temperature \
+  --out meta_classifier/artifacts/meta_lr.json
+```
+
 ## Teachers
 
 | Flag | Model | Notes |

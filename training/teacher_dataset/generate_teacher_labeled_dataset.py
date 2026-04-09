@@ -32,6 +32,7 @@ sys.path.insert(0, str(_ROOT))
 
 from aggregator.expert_runner import run_all_safeguards  # noqa: E402
 from meta_classifier.feature_builder import FeatureSpec, build_feature_vector  # noqa: E402
+from wrappers.env_utils import load_repo_env  # noqa: E402
 
 
 def _teacher_ok(result: Dict[str, Any]) -> bool:
@@ -108,6 +109,7 @@ def _load_hf_texts(
 
 
 def main() -> int:
+    load_repo_env()
     ap = argparse.ArgumentParser(description="Expert Q-values + teacher label dataset")
     ap.add_argument("--input-jsonl", type=str, default="", help="JSONL with a text field per line")
     ap.add_argument("--text-field", type=str, default="text", help="Field name for input string")

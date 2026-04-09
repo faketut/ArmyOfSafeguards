@@ -108,17 +108,44 @@ def _load_model(device: str = "cuda"):
         raise
     
     # Load model
-    device_map = "auto" if device == "cuda" else "cpu"
+    # `device_map="auto"` often offloads to CPU/disk on tight VRAM; forward + `model.device` then breaks
+    # logit scoring. Default: load the full 2B weights onto one CUDA device. Override with:
+    #   AOS_SHIELDGEMMA_DEVICE_MAP=auto
+    def _cuda_preferred_dtype():
+        try:
+            return torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        except Exception:
+            return torch.float16
+
     try:
-        _model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME,
-            device_map=device_map,
-            torch_dtype=torch.bfloat16 if device == "cuda" else torch.float32,
-        )
+        if device == "cuda":
+            mode = os.environ.get("AOS_SHIELDGEMMA_DEVICE_MAP", "cuda").strip().lower()
+            if mode == "auto":
+                dtype = _cuda_preferred_dtype()
+                _model = AutoModelForCausalLM.from_pretrained(
+                    MODEL_NAME,
+                    device_map="auto",
+                    torch_dtype=dtype,
+                )
+            else:
+                dtype = _cuda_preferred_dtype()
+                _model = AutoModelForCausalLM.from_pretrained(
+                    MODEL_NAME,
+                    device_map=None,
+                    torch_dtype=dtype,
+                )
+                _model.to(torch.device("cuda"))
+        else:
+            _model = AutoModelForCausalLM.from_pretrained(
+                MODEL_NAME,
+                device_map=None,
+                torch_dtype=torch.float32,
+            )
+            _model.to(torch.device("cpu"))
     except Exception as e:
         _load_error = f"{type(e).__name__}: {e}"
         raise
-    
+
     # Set to eval mode
     _model.eval()
     
@@ -172,9 +199,10 @@ def _get_score_from_logits(model, tokenizer, prompt: str, device: str) -> float:
     # Tokenize input
     inputs = tokenizer(prompt, return_tensors="pt")
     
-    # Move to device
+    # Move to device (single-device models: use first parameter device)
     if device == "cuda" and torch.cuda.is_available():
-        inputs = {k: v.to(model.device) for k, v in inputs.items()}
+        dev = next(model.parameters()).device
+        inputs = {k: v.to(dev) for k, v in inputs.items()}
     
     # Get logits
     with torch.no_grad():

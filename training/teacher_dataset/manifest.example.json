@@ -1,0 +1,25 @@
+{
+  "datasets": [
+    {
+      "dataset": "allenai/wildguardmix",
+      "config": "wildguardtrain",
+      "split": "train",
+      "text_field": "prompt",
+      "limit": 200,
+      "source": "hf:wildguardmix",
+      "domain": "mixed",
+      "language": "en"
+    },
+    {
+      "dataset": "JailbreakBench/JBB-Behaviors",
+      "config": "behaviors",
+      "split": "harmful",
+      "text_field": "Goal",
+      "limit": 200,
+      "source": "hf:jbb_behaviors_harmful",
+      "domain": "jailbreak",
+      "language": "en"
+    }
+  ]
+}
+

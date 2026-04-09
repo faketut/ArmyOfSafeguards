@@ -170,13 +170,22 @@ def main() -> int:
     args = parser.parse_args()
 
     spec = FeatureSpec()
-    rows = _load_jsonl(Path(args.data))
+    data_path = Path(args.data)
+    rows = _load_jsonl(data_path)
+    if not rows:
+        raise SystemExit(
+            f"No rows loaded from {str(data_path)!r} (empty file or only blank lines). "
+            f"Run label_manifest first and ensure it prints a positive 'Wrote N rows' count."
+        )
     X, y, _, groups = build_dataset(
         rows, spec=spec, label_field=args.label_field, group_field=args.group_field
     )
 
     if len(X) < 20:
-        raise SystemExit(f"Not enough training rows: {len(X)}")
+        raise SystemExit(
+            f"Not enough training rows after featurization: {len(X)} (loaded {len(rows)} JSONL lines). "
+            f"Often all rows lack usable individual_results — see warnings above."
+        )
 
     if groups is not None and args.n_folds > 1 and len(np.unique(groups)) < args.n_folds:
         print("warning: not enough unique groups for K-fold; falling back to stratified KFold")
