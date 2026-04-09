@@ -14,7 +14,7 @@ A modular, research-friendly collection of **AI safety “safeguards”** (speci
 - **Modular experts**: separate safeguards for factuality, sexual/sensitive content, toxicity, and jailbreak attempts
 - **Unified API**: a single `evaluate_text(...)` call to run all safeguards together
 - **CLI-friendly**: run individual experts or the aggregator from the command line
-- **Benchmarking & evaluation**: scripts and documented results for each safeguard
+- **Benchmarking & evaluation**: [`evaluation/run_benchmark.py`](evaluation/run_benchmark.py) against public HF safety benchmarks (see [`evaluation/README.md`](evaluation/README.md))
 
 ## Project layout
 
@@ -26,22 +26,27 @@ ArmyOfSafeguards/
 │   ├── sexual.py
 │   ├── jailbreak.py
 │   └── __init__.py
-├── docs/                    # Documentation
-│   └── experts/             # Per-expert docs
-├── training/                # Training scripts / notebooks — see training/README.md
-│   ├── jailbreak/
-│   ├── sexual/
-│   ├── meta/                # Meta-aggregator data & expert-featurization scripts
-│   └── teacher_dataset/     # Q-values + ShieldGemma/Granite teacher labels → meta training
-├── meta_classifier/         # Learned logistic meta-model over expert outputs
-├── docs/
-│   ├── experts/             # Per-expert docs
-│   ├── meta_training_labeling.md  # Meta training JSONL schema & labeling
-│   └── experts_training_status.md # Which experts are pretrained vs trainable locally
-├── aggregator/              # Unified interface for all safeguards
+├── aggregator/              # Unified interface + weighted / meta aggregation
 │   ├── aggregator.py
 │   └── README.md
-├── requirements.txt         # Shared dependencies
+├── meta_classifier/         # Learned meta-models over expert outputs (LR / XGB / MLP)
+├── policy/                  # Thresholds & triage
+├── rules/                   # Optional rule engine
+├── wrappers/                # Shared utilities for external model wrappers
+├── evaluation/              # HF benchmark harness — see evaluation/README.md
+├── benchmark/               # Thin shim: forwards to evaluation/run_benchmark.py
+├── training/                # Training & data — see training/README.md
+│   ├── common/              # Shared sequence-classifier training
+│   ├── experts/             # Native curriculum → SFT JSONL builders
+│   ├── jailbreak/           # Jailbreak expert fine-tune entry
+│   ├── toxicity/
+│   ├── meta/                # Meta JSONL, manifests, utilities
+│   └── teacher_dataset/     # Optional teacher-label pipelines
+├── docs/                    # Design & expert docs
+│   ├── experts/
+│   ├── meta_training_labeling.md
+│   └── experts_training_status.md
+├── requirements.txt
 └── README.md
 ```
 
@@ -118,7 +123,7 @@ print(f"Individual Results: {result['individual_results']}")
 - **Expert / training status**: [docs/experts_training_status.md](docs/experts_training_status.md)
 - **Labeling & schema**: [docs/meta_training_labeling.md](docs/meta_training_labeling.md)
 - **Pipeline & commands**: [training/meta/README.md](training/meta/README.md)
-- **Teacher-labeled data (Q₁…Q₄ + label)**: [training/teacher_dataset/README.md](training/teacher_dataset/README.md) — run `training/teacher_dataset/generate_teacher_labeled_dataset.py` with `--teacher shieldgemma` or `--teacher granite`, then `train_meta` on `--output-meta-jsonl`.
+- **Expert-Q–labeled data (Q₁…Q₄ + label)**: [training/teacher_dataset/README.md](training/teacher_dataset/README.md) — run `training/teacher_dataset/generate_teacher_labeled_dataset.py` (labels from max expert P(unsafe) vs `--threshold`), then `train_meta` on `--output-meta-jsonl`.
 - Train a model: `python3 -m meta_classifier.train_meta --data training/meta/synthetic_meta_train.jsonl --n-folds 5 --calibrate temperature --out meta_classifier/artifacts/meta_lr.json`
 - End-to-end shell example: `training/teacher_dataset/run_teacher_meta_pipeline.sh`
 - Runtime: set `AOS_META_MODEL_PATH` to your artifact, or use the default path under `meta_classifier/artifacts/`.

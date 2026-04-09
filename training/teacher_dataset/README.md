@@ -1,6 +1,6 @@
-# Teacher-labeled dataset (Q-values + label)
+# Expert-Q dataset (Q-values + binary label)
 
-Use a **teacher** model (ShieldGemma or Granite Guardian) to assign **binary unsafe/safe labels**, while each row includes the four expert **Q values** \(P(\text{unsafe})\) used by the meta-classifier.
+Each row runs the four in-repo experts and stores their **Q values** \(P(\text{unsafe})\). The **binary label** is derived in-repo: **unsafe** if `max(Q₁…Q₄) >= --threshold`, else **safe** (same spirit as the meta-classifier feature vector; no external teacher models).
 
 ## Format
 
@@ -8,42 +8,29 @@ Use a **teacher** model (ShieldGemma or Granite Guardian) to assign **binary uns
 
   `q_jailbreak,q_toxicity,q_sexual,q_factuality,label`
 
-  `label` is `1` = unsafe, `0` = safe (from teacher triage: not `is_safe`).
+  `label` is `1` = unsafe, `0` = safe.
 
-- **JSONL** (full record): includes `q`, `text`, `individual_results`, and teacher metadata.
+- **JSONL** (full record): includes `q`, `text`, `individual_results`, and fields such as `label_source`, `max_expert_q`, `label_threshold`.
 
 - **Meta JSONL** (`--output-meta-jsonl`): rows compatible with `meta_classifier/train_meta.py` (`individual_results` + `label` as `safe`/`unsafe`).
 
 ## Examples
 
-From a local JSONL with a `text` field (runs all four experts + ShieldGemma):
+From a local JSONL with a `text` field:
 
 ```bash
 cd /path/to/ArmyOfSafeguards
 
-## If you need gated model/dataset access:
-## - Copy `.env.example` -> `.env` and set HF_TOKEN, or run `huggingface-cli login`
-
 python3 training/teacher_dataset/generate_teacher_labeled_dataset.py \
   --input-jsonl training/meta/seed_meta_train.jsonl \
   --text-field text \
-  --teacher shieldgemma \
-  --device cuda \
-  --output-csv training/meta/teacher_q_labels.csv \
-  --output-jsonl training/meta/teacher_full.jsonl \
-  --output-meta-jsonl training/meta/teacher_for_meta.jsonl
+  --threshold 0.5 \
+  --output-csv training/meta/expert_q_labels.csv \
+  --output-jsonl training/meta/expert_q_full.jsonl \
+  --output-meta-jsonl training/meta/expert_q_for_meta.jsonl
 ```
 
-**Dry-run** (no ShieldGemma/Granite; labels from a heuristic on Q only — for plumbing tests):
-
-```bash
-python3 training/teacher_dataset/generate_teacher_labeled_dataset.py \
-  --input-jsonl training/meta/seed_meta_train.jsonl \
-  --text-field text \
-  --dry-run \
-  --output-csv training/meta/dryrun_q_labels.csv \
-  --output-meta-jsonl training/meta/dryrun_for_meta.jsonl
-```
+`--dry-run` is a deprecated no-op (behavior matches the default above).
 
 From Hugging Face (example: JailbreakBench harmful behaviors):
 
@@ -54,15 +41,15 @@ python3 training/teacher_dataset/generate_teacher_labeled_dataset.py \
   --hf-split harmful \
   --hf-text-field Goal \
   --limit 500 \
-  --teacher granite \
-  --output-meta-jsonl training/meta/jbb_harmful_teacher.jsonl
+  --threshold 0.5 \
+  --output-meta-jsonl training/meta/jbb_harmful_expert_q.jsonl
 ```
 
 Then train the meta-classifier:
 
 ```bash
 python3 -m meta_classifier.train_meta \
-  --data training/meta/teacher_for_meta.jsonl \
+  --data training/meta/expert_q_for_meta.jsonl \
   --n-folds 5 \
   --group-field source \
   --calibrate temperature \
@@ -76,34 +63,28 @@ python3 -m meta_classifier.train_meta \
 | Variable | Meaning |
 |----------|---------|
 | `INPUT_JSONL` | Input JSONL (default `training/meta/seed_meta_train.jsonl`) |
-| `TEACHER` | `shieldgemma` or `granite` |
 | `LIMIT` | Max rows |
-| `DEVICE` | `cuda` or `cpu` |
-| `DRY_RUN` | Set to `1` for `--dry-run` (no teacher load) |
 | `META_OUT` / `ARTIFACT_OUT` | Output paths |
 
 ```bash
 LIMIT=200 ./training/teacher_dataset/run_teacher_meta_pipeline.sh
-DRY_RUN=1 LIMIT=50 ./training/teacher_dataset/run_teacher_meta_pipeline.sh
 ```
 
 ## Batch: multiple HF datasets (manifest)
 
-If you want to label **multiple** Hugging Face datasets with the **same teacher** (e.g. ShieldGemma) and merge them into one meta-training JSONL, use:
+To process **multiple** Hugging Face datasets from one manifest and merge into one meta-training JSONL:
 
 ```bash
 python training/teacher_dataset/label_manifest.py \
   --manifest training/teacher_dataset/manifest.example.json \
-  --teacher shieldgemma \
-  --device cuda \
   --threshold 0.5 \
   --require-expert-outputs \
-  --out training/meta/teacher_all_for_meta.jsonl
+  --out training/meta/pool_expert_q_for_meta.jsonl
 ```
 
 ### Manifest filters (optional)
 
-To increase the unsafe rate for hard domains (e.g. `toxicity`, `sexual`), you can pre-filter HF rows **before** running experts/teacher:
+To increase the unsafe rate for hard domains (e.g. `toxicity`, `sexual`), you can pre-filter HF rows **before** running experts:
 
 - `filters_all`: all conditions must match
 - `filters_any`: at least one condition must match
@@ -132,20 +113,16 @@ Then train a unified meta policy:
 
 ```bash
 python -m meta_classifier.train_meta \
-  --data training/meta/teacher_all_for_meta.jsonl \
+  --data training/meta/pool_expert_q_for_meta.jsonl \
   --n-folds 5 \
   --group-field source \
   --calibrate temperature \
   --out meta_classifier/artifacts/meta_lr.json
 ```
 
-## Teachers
+## Label rule & quality
 
-| Flag | Model | Notes |
-|------|-------|--------|
-| `--teacher shieldgemma` | `google/shieldgemma-2b` | **Gated on Hugging Face** — accept terms on the model page, then `huggingface-cli login` or set `HF_TOKEN` (e.g. via `.env`). |
-| `--teacher granite` | `ibm-granite/granite-guardian-3.3-8b` | Large; may need vLLM + VRAM; check HF access terms. |
-
-Use `--require-expert-outputs` to refuse writing rows when any expert fails (avoids all-0.5 Q vectors). Teacher rows are skipped if the wrapper returns an error (e.g. 401 on gated repos without a token).
+- Tune `--threshold` to trade precision vs recall on your pool; it applies to **max** of the four expert unsafe probabilities.
+- Use `--require-expert-outputs` to skip rows when any expert fails (avoids degenerate Q vectors).
 
 See also [docs/experts_training_status.md](../../docs/experts_training_status.md).

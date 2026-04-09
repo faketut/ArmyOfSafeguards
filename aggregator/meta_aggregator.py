@@ -3,7 +3,7 @@ Meta-classifier aggregator (learned logistic regression).
 
 This aggregator uses the expert safeguards' outputs as features and predicts
 P(unsafe) using a learned logistic model. It preserves the legacy return keys
-used by `benchmark/run_benchmark.py`.
+used by `evaluation/run_benchmark.py`.
 """
 
 from __future__ import annotations

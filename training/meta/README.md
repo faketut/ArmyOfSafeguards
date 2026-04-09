@@ -5,9 +5,23 @@
 1. **Label data** — Follow [docs/meta_training_labeling.md](../../docs/meta_training_labeling.md).
 2. **Seed JSONL** — `seed_meta_train.jsonl`: rows with `text`, `label`, optional `id` / `domain` / `source`.
 3. **Expert features** — Run `generate_expert_features.py` to append `individual_results` (calls all experts).
-4. **Optional: teacher labels** — Use [../teacher_dataset/README.md](../teacher_dataset/README.md) to build CSV / meta JSONL with **ShieldGemma** or **Granite Guardian** (requires HF access token for gated models). If you already have **human `label`** in JSONL, use `generate_expert_features.py` only — see `seed_meta_train_with_experts.jsonl` (generated from `seed_meta_train.jsonl`).
-5. **Train meta** — `python -m meta_classifier.train_meta --data ...` (see [meta_classifier/train_meta.py](../../meta_classifier/train_meta.py) for OOF and calibration flags).
-6. **Point runtime at the artifact** — Set `AOS_META_MODEL_PATH` or place `meta_classifier/artifacts/meta_lr.json`.
+4. **Optional: expert-Q labels** — Use [../teacher_dataset/README.md](../teacher_dataset/README.md) to build CSV / meta JSONL from the four experts plus a **max-Q threshold** label. If you already have **human `label`** in JSONL, use `generate_expert_features.py` only — see `seed_meta_train_with_experts.jsonl` (generated from `seed_meta_train.jsonl`).
+5. **Train meta** — `python -m meta_classifier.train_meta --data ...` (see [meta_classifier/train_meta.py](../../meta_classifier/train_meta.py) for OOF and calibration flags), or **tabular** models: [meta_classifier/train_meta_tabular.py](../../meta_classifier/train_meta_tabular.py) (`--algo xgb|mlp`, writes a directory with `manifest.json`).
+6. **Point runtime at the artifact** — Set `AOS_META_MODEL_PATH` to a **JSON file** (legacy logistic, e.g. `meta_lr.json`) or a **directory** containing `manifest.json` (XGBoost / MLP from `train_meta_tabular.py`). [meta_classifier/predict.py](../../meta_classifier/predict.py) loads both.
+
+### Native HF labels (no teacher)
+
+Build meta-ready JSONL directly from Hugging Face rows + native label maps (see [build_meta_from_hf_labels.py](build_meta_from_hf_labels.py)):
+
+```bash
+# Single dataset
+python training/meta/build_meta_from_hf_labels.py --dataset toxigen/toxigen-data --split train --limit 500 --out training/meta/tox_native.jsonl
+
+# Multi-dataset pool (unified unsafe = dataset-native unsafe for each row)
+python training/meta/build_meta_from_hf_labels.py --datasets-manifest training/meta/meta_native_pool.example.json --out training/meta/pool_native.jsonl
+```
+
+JBB-Behaviors needs split names `harmful` / `benign` in the manifest so labels resolve correctly.
 
 ## Quick commands
 

@@ -1,21 +1,17 @@
 #!/usr/bin/env python3
 """
-Build training rows: expert Q-values + teacher label.
+Build training rows: expert Q-values + binary label.
 
 For each input text we compute:
   q_i = P(unsafe) for each default expert (jailbreak, toxicity, sexual, factuality),
         same mapping as meta_classifier.feature_builder.
 
-The label is produced by a teacher model:
-  - shieldgemma: google/shieldgemma-2b (violation probability -> unsafe if not is_safe)
-  - granite:     ibm-granite/granite-guardian-3.3-8b (score yes/no -> unsafe)
+The label is derived in-repo from the experts only:
+  unsafe if max(q_1..q_4) >= --threshold, else safe.
 
 Output formats:
   - CSV:  q_jailbreak,q_toxicity,q_sexual,q_factuality,label
-  - JSONL: one object per line with q, label, text, teacher, individual_results (for meta training)
-
-Dry-run (--dry-run) skips teacher models and assigns label from a simple heuristic on Q
-(useful for pipeline tests without GPU / large downloads).
+  - JSONL: one object per line with q, label, text, individual_results (for meta training)
 """
 from __future__ import annotations
 
@@ -29,41 +25,12 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 # Repo root
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aggregator.expert_runner import run_all_safeguards  # noqa: E402
+from expert_q_label import label_from_expert_q  # noqa: E402
 from meta_classifier.feature_builder import FeatureSpec, build_feature_vector  # noqa: E402
 from wrappers.env_utils import load_repo_env  # noqa: E402
-
-
-def _teacher_ok(result: Dict[str, Any]) -> bool:
-    for f in result.get("flags", []):
-        if f.get("label") == "error":
-            return False
-    for v in (result.get("individual_results") or {}).values():
-        if isinstance(v, dict) and "error" in v:
-            return False
-    return True
-
-
-def _parse_label_from_teacher(result: Dict[str, Any]) -> Tuple[int, str]:
-    """Binary label: 1 = unsafe, 0 = safe. Also return verdict string."""
-    is_safe = result.get("is_safe", True)
-    verdict = result.get("verdict", "safe" if is_safe else "unsafe")
-    if not is_safe:
-        return 1, str(verdict)
-    return 0, str(verdict)
-
-
-def _teacher_evaluate(text: str, teacher: str, threshold: float, device: str) -> Dict[str, Any]:
-    if teacher == "shieldgemma":
-        from shieldgemma.shieldgemma_wrapper import evaluate_text
-
-        return evaluate_text(text, threshold=threshold, device=device)
-    if teacher == "granite":
-        from granite_guardian.granite_guardian_wrapper import evaluate_text
-
-        return evaluate_text(text, threshold=threshold, device=device, criteria="jailbreak")
-    raise ValueError(f"Unknown teacher: {teacher}")
 
 
 def _q_vector(individual_results: Dict[str, Any], *, include_rules: bool) -> Tuple[List[float], List[str]]:
@@ -110,7 +77,7 @@ def _load_hf_texts(
 
 def main() -> int:
     load_repo_env()
-    ap = argparse.ArgumentParser(description="Expert Q-values + teacher label dataset")
+    ap = argparse.ArgumentParser(description="Expert Q-values + binary label (max-Q threshold)")
     ap.add_argument("--input-jsonl", type=str, default="", help="JSONL with a text field per line")
     ap.add_argument("--text-field", type=str, default="text", help="Field name for input string")
     ap.add_argument("--hf-dataset", type=str, default="", help="HF dataset id (e.g. JailbreakBench)")
@@ -124,14 +91,11 @@ def main() -> int:
     ap.add_argument("--hf-text-field", type=str, default="Goal", help="Text column for HF rows")
     ap.add_argument("--limit", type=int, default=None, help="Max rows to process")
     ap.add_argument(
-        "--teacher",
-        type=str,
-        choices=["shieldgemma", "granite"],
-        default="shieldgemma",
-        help="Teacher for labels (requires GPU/weights unless --dry-run)",
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Label unsafe if max expert P(unsafe) in the four heads >= this value",
     )
-    ap.add_argument("--threshold", type=float, default=0.5, help="Teacher triage threshold")
-    ap.add_argument("--device", type=str, default="cuda", help="cuda or cpu for teacher")
     ap.add_argument(
         "--include-rules-q",
         action="store_true",
@@ -140,7 +104,7 @@ def main() -> int:
     ap.add_argument(
         "--dry-run",
         action="store_true",
-        help="Do not call teacher models; label=1 if max(q[:4])>=0.5 else 0",
+        help="Deprecated no-op (same as default: labels always from expert Q heuristic)",
     )
     ap.add_argument(
         "--require-expert-outputs",
@@ -230,25 +194,13 @@ def main() -> int:
             # Should not happen; keep robust
             q_full = (q_full + [0.0] * n_q)[:n_q]
 
-        if args.dry_run:
-            label = 1 if max(q_full[:4]) >= 0.5 else 0
-            verdict = "unsafe" if label == 1 else "safe"
-            teacher_payload: Dict[str, Any] = {"teacher": "dry_run", "verdict": verdict}
-        else:
-            try:
-                tres = _teacher_evaluate(text, args.teacher, args.threshold, args.device)
-                if not _teacher_ok(tres):
-                    print(f"warning: teacher unavailable or error for text id={row.get('id')!r}", file=sys.stderr)
-                    continue
-                label, verdict = _parse_label_from_teacher(tres)
-                teacher_payload = {
-                    "teacher": args.teacher,
-                    "verdict": verdict,
-                    "is_safe": tres.get("is_safe"),
-                }
-            except Exception as e:
-                print(f"warning: teacher failed on row {processed}: {e}", file=sys.stderr)
-                continue
+        lbl_str, verdict, max_q = label_from_expert_q(individual_results, threshold=args.threshold)
+        label = 1 if lbl_str == "unsafe" else 0
+        teacher_payload: Dict[str, Any] = {
+            "label_source": "expert_q_heuristic",
+            "verdict": verdict,
+            "max_expert_q": max_q,
+        }
 
         q_out = q_full[:4] if not include_rules else q_full
 
@@ -277,7 +229,7 @@ def main() -> int:
                 "text": text,
                 "label": "unsafe" if label == 1 else "safe",
                 "individual_results": individual_results,
-                "teacher": teacher_payload.get("teacher"),
+                "label_source": teacher_payload.get("label_source"),
             }
             f_m.write(json.dumps({k: v for k, v in meta_row.items() if v is not None}, ensure_ascii=False) + "\n")
 
@@ -291,13 +243,13 @@ def main() -> int:
         f_m.close()
 
     dim = len(q_out) if q_out else (5 if include_rules else 4)
-    print(f"Wrote {processed} rows (Q dim={dim}, label from {'dry-run' if args.dry_run else args.teacher})")
+    print(f"Wrote {processed} rows (Q dim={dim}, label from expert_q_heuristic, threshold={args.threshold})")
     if args.require_expert_outputs and expert_error_rows:
         print(f"(skipped {expert_error_rows} input row(s) with missing/failed experts)", file=sys.stderr)
     if args.require_expert_outputs and processed == 0:
         print(
             "error: no rows written — all rows skipped (experts missing, or teacher failed). "
-            "For gated teachers: accept terms on Hugging Face and set HF_TOKEN / huggingface-cli login.",
+            "Check expert downloads (HF) and network.",
             file=sys.stderr,
         )
         return 2

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
@@ -12,20 +13,29 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from experts.batching import batched_binary_bool_predict
 from experts.runtime import get_torch_device
 
-MODEL_ID = "tommypang04/finetuned-model-jailbrak"
+DEFAULT_MODEL_ID = "tommypang04/finetuned-model-jailbrak"
 
-_MODEL_CACHE: Tuple[AutoTokenizer, AutoModelForSequenceClassification] | None = None
+_MODEL_CACHE: Tuple[str, AutoTokenizer, AutoModelForSequenceClassification] | None = None
+
+
+def _model_id_from_env() -> str:
+    return (
+        os.environ.get("AOS_JAILBREAK_MODEL", "").strip()
+        or os.environ.get("AOS_JAILBREAK_MODEL_ID", "").strip()
+        or DEFAULT_MODEL_ID
+    )
 
 
 def _get_model() -> Tuple[AutoTokenizer, AutoModelForSequenceClassification]:
     global _MODEL_CACHE
-    if _MODEL_CACHE is None:
-        tok = AutoTokenizer.from_pretrained(MODEL_ID)
-        model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+    mid = _model_id_from_env()
+    if _MODEL_CACHE is None or _MODEL_CACHE[0] != mid:
+        tok = AutoTokenizer.from_pretrained(mid)
+        model = AutoModelForSequenceClassification.from_pretrained(mid)
         model.eval()
         model.to(get_torch_device())
-        _MODEL_CACHE = (tok, model)
-    return _MODEL_CACHE
+        _MODEL_CACHE = (mid, tok, model)
+    return _MODEL_CACHE[1], _MODEL_CACHE[2]
 
 
 def predict(text: str) -> Dict[str, float]:

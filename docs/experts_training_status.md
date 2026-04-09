@@ -11,25 +11,16 @@ Each expert is a **small HF sequence-classification model** (or boolean jailbrea
 | Factuality | `ajith-bondili/deberta-v3-factuality-small` | Train externally; plug in new ID |
 | Jailbreak | `tommypang04/finetuned-model-jailbrak` | `training/jailbreak/train.py` (DeBERTa on in-the-wild jailbreak data) |
 
-**Nothing is “missing weights” at runtime** as long as Hugging Face can download these checkpoints. “Finishing training” usually means **your own** fine-tunes on domain data, or **distillation** from a stronger teacher (below).
-
-## Teacher models (not part of the 4-expert bundle)
-
-| Teacher | Role | Notes |
-|---------|------|--------|
-| **ShieldGemma** (`google/shieldgemma-2b`) | Strong moderation prior | Fits on one GPU more easily than 8B |
-| **Granite Guardian** (`ibm-granite/granite-guardian-3.3-8b`) | Criterion-specific (e.g. jailbreak) | Heavier; may need vLLM + large VRAM |
-
-Use them to **label** text and to train the **meta-classifier** (and optionally future student heads). See [training/teacher_dataset/README.md](../training/teacher_dataset/README.md) and the overview [training/README.md](../training/README.md).
+**Nothing is “missing weights” at runtime** as long as Hugging Face can download these checkpoints. “Finishing training” usually means **your own** fine-tunes on domain data, or **distillation** from a stronger external moderator (outside this repo).
 
 ## Meta-classifier
 
 - **Input features**: per-expert \(P(\text{unsafe})\) (+ optional rules flag). See `meta_classifier/feature_builder.py`.
 - **Training**: `python3 -m meta_classifier.train_meta --data <jsonl> ...`
-- **Recommended data**: JSONL with `individual_results` + `label`, where `label` comes from a teacher or human. Generate with `training/teacher_dataset/generate_teacher_labeled_dataset.py`.
+- **Recommended data**: JSONL with `individual_results` + `label`, where `label` is human, dataset-native (see `training/meta/build_meta_from_hf_labels.py`), or from the in-repo **expert-Q heuristic** in `training/teacher_dataset/generate_teacher_labeled_dataset.py`.
 
 ## Suggested “finish training” order
 
-1. Generate teacher-labeled dataset: `q` vector + `label` (CSV/JSONL).
-2. Train meta: `train_meta.py` on the JSONL that includes `individual_results` + `label` (see teacher script `--write-meta-jsonl`).
-3. Optionally fine-tune individual experts on domain JSON using standard `Trainer` + your labels (teacher or human), then update `MODEL_ID` in each expert module.
+1. Build a dataset with `q` / `individual_results` + `label` (CSV/JSONL as needed).
+2. Train meta: `train_meta.py` on JSONL that includes `individual_results` + `label`.
+3. Optionally fine-tune individual experts on domain JSON using standard `Trainer` + your labels, then update `MODEL_ID` in each expert module.

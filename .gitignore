@@ -54,8 +54,10 @@ model/
 
 # Ignore evaluation results (can be regenerated)
 tests/evaluation_*.json
+benchmark/benchmark_*.json
+evaluation/benchmark_*.json
 
-# Ignore Python cache
-__pycache__/
-*.pyc
-*.pyo
+# Generated teacher / smoke artifacts under training/meta (regenerate via scripts)
+training/meta/teacher_*.csv
+training/meta/_smoke*.jsonl
+training/meta/_last_gen.log

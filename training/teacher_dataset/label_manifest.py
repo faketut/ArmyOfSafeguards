@@ -4,7 +4,7 @@ Batch teacher-label multiple datasets and emit a single meta-training JSONL.
 
 Each manifest entry loads a Hugging Face dataset, extracts a text field, runs:
   1) all experts -> individual_results
-  2) ShieldGemma (or Granite) -> teacher label safe/unsafe
+  2) binary label from max expert P(unsafe) (same Q features as meta_classifier; no external teacher)
 
 Output rows are compatible with `python -m meta_classifier.train_meta`.
 
@@ -23,29 +23,11 @@ from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aggregator.expert_runner import run_all_safeguards  # noqa: E402
+from expert_q_label import label_from_expert_q  # noqa: E402
 from wrappers.env_utils import load_repo_env  # noqa: E402
-
-
-def _teacher_ok(result: Dict[str, Any]) -> bool:
-    for f in result.get("flags", []):
-        if f.get("label") == "error":
-            return False
-    for v in (result.get("individual_results") or {}).values():
-        if isinstance(v, dict) and "error" in v:
-            return False
-    return True
-
-
-def _teacher_failure_reason(result: Dict[str, Any]) -> str:
-    for f in result.get("flags", []) or []:
-        if isinstance(f, dict) and f.get("label") == "error":
-            return str(f.get("reason", f))
-    for k, v in (result.get("individual_results") or {}).items():
-        if isinstance(v, dict) and "error" in v:
-            return f"{k}: {v.get('error')}"
-    return "unknown"
 
 
 def _as_float(v: Any) -> Optional[float]:
@@ -129,36 +111,6 @@ def _entry_passes_filters(entry: Dict[str, Any], ex: Dict[str, Any]) -> bool:
             return False
 
     return True
-
-
-def _parse_label_from_teacher(result: Dict[str, Any]) -> Tuple[str, str, Optional[float]]:
-    """
-    Returns (label_str, verdict_str, score_unsafe_opt).
-    """
-    is_safe = bool(result.get("is_safe", True))
-    verdict = str(result.get("verdict", "safe" if is_safe else "unsafe"))
-    label = "safe" if is_safe else "unsafe"
-
-    score = None
-    # ShieldGemma wrapper exports `violation_probability`; also stores `score_unsafe` in payload.
-    for k in ("violation_probability", "score_unsafe"):
-        v = result.get(k)
-        if isinstance(v, (int, float)):
-            score = float(v)
-            break
-    return label, verdict, score
-
-
-def _teacher_evaluate(text: str, teacher: str, threshold: float, device: str) -> Dict[str, Any]:
-    if teacher == "shieldgemma":
-        from shieldgemma.shieldgemma_wrapper import evaluate_text
-
-        return evaluate_text(text, threshold=threshold, device=device)
-    if teacher == "granite":
-        from granite_guardian.granite_guardian_wrapper import evaluate_text
-
-        return evaluate_text(text, threshold=threshold, device=device, criteria="jailbreak")
-    raise ValueError(f"Unknown teacher: {teacher}")
 
 
 def _iter_hf_rows(
@@ -255,12 +207,15 @@ def _entry_get_limit(entry: Dict[str, Any]) -> Optional[int]:
 def main() -> int:
     load_repo_env()
 
-    ap = argparse.ArgumentParser(description="Batch teacher-label datasets from a JSON manifest")
+    ap = argparse.ArgumentParser(description="Batch expert-Q label datasets from a JSON manifest")
     ap.add_argument("--manifest", type=str, required=True, help="Path to JSON manifest")
     ap.add_argument("--out", type=str, required=True, help="Output meta-ready JSONL path")
-    ap.add_argument("--teacher", type=str, choices=["shieldgemma", "granite"], default="shieldgemma")
-    ap.add_argument("--threshold", type=float, default=0.5)
-    ap.add_argument("--device", type=str, default="cuda")
+    ap.add_argument(
+        "--threshold",
+        type=float,
+        default=0.5,
+        help="Unsafe if max expert P(unsafe) among the four heads >= this value",
+    )
     ap.add_argument("--require-expert-outputs", action="store_true", help="Skip rows if any expert errors")
     ap.add_argument(
         "--max-per-dataset",
@@ -281,9 +236,7 @@ def main() -> int:
     written = 0
     skipped_text = 0
     skipped_expert = 0
-    skipped_teacher = 0
     first_expert_skip: str = ""
-    first_teacher_skip: str = ""
 
     with out_path.open("w", encoding="utf-8") as f:
         for entry in entries:
@@ -340,22 +293,16 @@ def main() -> int:
                                         break
                             continue
 
-                    tres = _teacher_evaluate(text, args.teacher, args.threshold, args.device)
-                    if not _teacher_ok(tres):
-                        skipped_teacher += 1
-                        if not first_teacher_skip:
-                            first_teacher_skip = _teacher_failure_reason(tres)
-                        continue
-
-                    label, verdict, score_unsafe = _parse_label_from_teacher(tres)
+                    label, verdict, max_q = label_from_expert_q(individual_results, threshold=args.threshold)
 
                     row: Dict[str, Any] = {
                         "text": text,
                         "label": label,
                         "individual_results": individual_results,
-                        "teacher": args.teacher,
-                        "teacher_verdict": verdict,
-                        "teacher_threshold": float(args.threshold),
+                        "label_source": "expert_q_heuristic",
+                        "label_verdict": verdict,
+                        "label_threshold": float(args.threshold),
+                        "max_expert_q": float(max_q),
                         "dataset": dataset,
                         "config": config,
                         "split": split,
@@ -365,8 +312,6 @@ def main() -> int:
                         row["domain"] = domain
                     if language:
                         row["language"] = language
-                    if score_unsafe is not None:
-                        row["teacher_score_unsafe"] = float(score_unsafe)
 
                     # carry over a stable id if available
                     for kid in ("id", "idx"):
@@ -378,18 +323,13 @@ def main() -> int:
                     written += 1
 
     print(
-        f"Wrote {written} rows to {out_path}. "
-        f"Skipped: text={skipped_text}, expert={skipped_expert}, teacher={skipped_teacher}"
+        f"Wrote {written} rows to {out_path}. Skipped: text={skipped_text}, expert={skipped_expert}"
     )
     if written == 0:
         print(
-            "error: no rows written. If teacher skips dominated, ShieldGemma may have failed every forward pass "
-            "(try unset AOS_SHIELDGEMMA_DEVICE_MAP or leave default 'cuda' for single-GPU load; avoid 'auto' offload). "
-            "If expert skips dominated, drop --require-expert-outputs temporarily to see teacher errors.",
+            "error: no rows written. If expert skips dominated, drop --require-expert-outputs temporarily.",
             file=sys.stderr,
         )
-        if first_teacher_skip:
-            print(f"first teacher failure: {first_teacher_skip}", file=sys.stderr)
         if first_expert_skip:
             print(f"first expert failure: {first_expert_skip}", file=sys.stderr)
         return 2

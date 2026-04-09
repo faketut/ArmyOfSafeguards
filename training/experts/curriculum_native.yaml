@@ -1,0 +1,215 @@
+# Native per-expert SFT pools (no teacher models).
+#
+# Rule: positives = ONLY this expert's README-domain native-unsafe rows.
+#       Rows that are native-unsafe under another safeguard (jailbreak / toxicity /
+#       sexual / factuality) are negatives here (y=0), including when that means
+#       labeling another head's "unsafe" as safe for this task.
+#
+# Each pool row uses `label_mode`:
+#   - force: every row gets integer y (0 or 1).
+#   - native: keep row only if _map_label(dataset, ex) == want_unsafe (bool).
+#
+# Positive / negative sections: positive_pools -> unsafe=1, negative_pools -> unsafe=0.
+
+experts:
+  jailbreak:
+    positive_pools:
+      - hf_id: JailbreakBench/JBB-Behaviors
+        config: behaviors
+        splits: [harmful]
+        text_field: Goal
+        label_mode: force
+        y: 1
+    negative_pools:
+      - hf_id: JailbreakBench/JBB-Behaviors
+        config: behaviors
+        splits: [benign]
+        text_field: Goal
+        label_mode: force
+        y: 0
+      - hf_id: toxigen/toxigen-data
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 8000
+      - hf_id: cglez/civil_comments_clean
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 8000
+      - hf_id: cardiffnlp/x_sensitive
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 5000
+      - hf_id: fever
+        config: v1.0
+        splits: [train]
+        text_field: claim
+        label_mode: force
+        y: 0
+        limit: 5000
+      - hf_id: pravalika-9/hate_speech_twitter
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 5000
+
+  toxicity:
+    positive_pools:
+      - hf_id: toxigen/toxigen-data
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: true
+        limit: 12000
+      - hf_id: pravalika-9/hate_speech_twitter
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: true
+        limit: 5000
+      - hf_id: cglez/civil_comments_clean
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: true
+        limit: 12000
+    negative_pools:
+      - hf_id: JailbreakBench/JBB-Behaviors
+        config: behaviors
+        splits: [harmful, benign]
+        text_field: Goal
+        label_mode: force
+        y: 0
+      - hf_id: toxigen/toxigen-data
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: false
+        limit: 12000
+      - hf_id: cglez/civil_comments_clean
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: false
+        limit: 12000
+      - hf_id: cardiffnlp/x_sensitive
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 6000
+      - hf_id: fever
+        config: v1.0
+        splits: [train]
+        text_field: claim
+        label_mode: force
+        y: 0
+        limit: 6000
+      - hf_id: pravalika-9/hate_speech_twitter
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: false
+        limit: 5000
+
+  sexual:
+    positive_pools:
+      - hf_id: cardiffnlp/x_sensitive
+        config: null
+        splits: [train]
+        label_mode: native
+        want_unsafe: true
+        limit: 8000
+    negative_pools:
+      - hf_id: JailbreakBench/JBB-Behaviors
+        config: behaviors
+        splits: [harmful, benign]
+        text_field: Goal
+        label_mode: force
+        y: 0
+      - hf_id: toxigen/toxigen-data
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 6000
+      - hf_id: pravalika-9/hate_speech_twitter
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 5000
+      - hf_id: cglez/civil_comments_clean
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 8000
+      - hf_id: fever
+        config: v1.0
+        splits: [train]
+        text_field: claim
+        label_mode: force
+        y: 0
+        limit: 6000
+
+  factuality:
+    positive_pools:
+      - hf_id: fever
+        config: v1.0
+        splits: [train]
+        text_field: claim
+        label_mode: native
+        want_unsafe: true
+        limit: 15000
+      - hf_id: tals/vitaminc
+        config: null
+        splits: [train]
+        text_field: claim
+        label_mode: native
+        want_unsafe: true
+        limit: 8000
+    negative_pools:
+      - hf_id: fever
+        config: v1.0
+        splits: [train]
+        text_field: claim
+        label_mode: native
+        want_unsafe: false
+        limit: 15000
+      - hf_id: JailbreakBench/JBB-Behaviors
+        config: behaviors
+        splits: [harmful, benign]
+        text_field: Goal
+        label_mode: force
+        y: 0
+      - hf_id: toxigen/toxigen-data
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 4000
+      - hf_id: cardiffnlp/x_sensitive
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 5000
+      - hf_id: pravalika-9/hate_speech_twitter
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 5000
+      - hf_id: cglez/civil_comments_clean
+        config: null
+        splits: [train]
+        label_mode: force
+        y: 0
+        limit: 8000

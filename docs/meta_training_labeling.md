@@ -26,7 +26,7 @@ Runtime aggregation (`policy/triage.py`) maps a scalar \(P(\text{unsafe})\) to:
 
 **Training convention (conservative, matches benchmark code):**
 
-- Treat **`needs_review` as not safe** when converting predictions to binary metrics (same as `benchmark/run_benchmark.py`: `is_safe = verdict == "safe"`).
+- Treat **`needs_review` as not safe** when converting predictions to binary metrics (same as `evaluation/run_benchmark.py`: `is_safe = verdict == "safe"`).
 - For **ground-truth labels**, prefer explicit `safe` / `unsafe`. If a human reviewer would send an item to moderation **without blocking**, you may either:
   - label it `unsafe` if your policy counts review as a positive hit, or
   - label it `safe` and rely on triage at inference — **pick one policy and stay consistent**.

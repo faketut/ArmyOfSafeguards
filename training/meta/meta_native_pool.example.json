@@ -1,0 +1,32 @@
+{
+  "datasets": [
+    {
+      "hf_id": "JailbreakBench/JBB-Behaviors",
+      "config": "behaviors",
+      "splits": ["harmful", "benign"],
+      "text_field": "Goal",
+      "limit": 500
+    },
+    {
+      "hf_id": "toxigen/toxigen-data",
+      "config": null,
+      "splits": ["train"],
+      "text_field": "",
+      "limit": 2000
+    },
+    {
+      "hf_id": "cardiffnlp/x_sensitive",
+      "config": null,
+      "splits": ["train"],
+      "text_field": "",
+      "limit": 2000
+    },
+    {
+      "hf_id": "fever",
+      "config": "v1.0",
+      "splits": ["train"],
+      "text_field": "claim",
+      "limit": 3000
+    }
+  ]
+}
