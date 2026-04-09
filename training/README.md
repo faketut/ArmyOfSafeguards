@@ -8,6 +8,7 @@ Entry points for fine-tuning experts, building meta-aggregator data, and running
 | [teacher_dataset/README.md](teacher_dataset/README.md) | **Q-values** (per-expert P(unsafe)) + **ShieldGemma / Granite** teacher labels → CSV + meta-ready JSONL |
 | [teacher_dataset/run_teacher_meta_pipeline.sh](teacher_dataset/run_teacher_meta_pipeline.sh) | One-shot: teacher-labeled JSONL → `meta_classifier/artifacts/meta_lr.json` |
 | [jailbreak/train.py](jailbreak/train.py) | Optional DeBERTa jailbreak expert fine-tune |
+| [toxicity/train.py](toxicity/train.py) | Fine-tune toxicity expert on teacher-labeled meta JSONL |
 | `sexual/` | Notebooks for sensitive-content expert experiments |
 
 **Docs:** [docs/experts_training_status.md](../docs/experts_training_status.md), [docs/meta_training_labeling.md](../docs/meta_training_labeling.md).

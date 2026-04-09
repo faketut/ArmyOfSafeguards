@@ -48,6 +48,89 @@ def _teacher_failure_reason(result: Dict[str, Any]) -> str:
     return "unknown"
 
 
+def _as_float(v: Any) -> Optional[float]:
+    try:
+        if isinstance(v, bool):
+            return None
+        if isinstance(v, (int, float)):
+            return float(v)
+        if isinstance(v, str) and v.strip():
+            return float(v.strip())
+    except Exception:
+        return None
+    return None
+
+
+def _match_filter(ex: Dict[str, Any], flt: Dict[str, Any]) -> bool:
+    """
+    Manifest filter:
+      {"field": "toxicity", "op": "eq|neq|gt|ge|lt|le|in|contains", "value": ...}
+    """
+    field = str(flt.get("field", "")).strip()
+    op = str(flt.get("op", "eq")).strip().lower()
+    val = flt.get("value")
+
+    if not field:
+        return True
+
+    ex_val = ex.get(field)
+
+    if op == "eq":
+        return ex_val == val
+    if op == "neq":
+        return ex_val != val
+    if op in {"gt", "ge", "lt", "le"}:
+        a = _as_float(ex_val)
+        b = _as_float(val)
+        if a is None or b is None:
+            return False
+        if op == "gt":
+            return a > b
+        if op == "ge":
+            return a >= b
+        if op == "lt":
+            return a < b
+        return a <= b
+    if op == "in":
+        if isinstance(val, (list, tuple, set)):
+            return ex_val in val
+        return False
+    if op == "contains":
+        if isinstance(ex_val, str) and isinstance(val, str):
+            return val in ex_val
+        if isinstance(ex_val, (list, tuple, set)):
+            return val in ex_val
+        return False
+    # Unknown op: do not match
+    return False
+
+
+def _entry_passes_filters(entry: Dict[str, Any], ex: Dict[str, Any]) -> bool:
+    """
+    Optional manifest fields:
+      - "filters_all": [filter, ...] (all must pass)
+      - "filters_any": [filter, ...] (at least one must pass)
+    """
+    all_filters = entry.get("filters_all", [])
+    any_filters = entry.get("filters_any", [])
+
+    if isinstance(all_filters, list):
+        for flt in all_filters:
+            if isinstance(flt, dict) and not _match_filter(ex, flt):
+                return False
+
+    if isinstance(any_filters, list) and any_filters:
+        ok_any = False
+        for flt in any_filters:
+            if isinstance(flt, dict) and _match_filter(ex, flt):
+                ok_any = True
+                break
+        if not ok_any:
+            return False
+
+    return True
+
+
 def _parse_label_from_teacher(result: Dict[str, Any]) -> Tuple[str, str, Optional[float]]:
     """
     Returns (label_str, verdict_str, score_unsafe_opt).
@@ -232,6 +315,8 @@ def main() -> int:
                 per_split_limit = base_limit
 
                 for ex in _iter_hf_rows(dataset, config, split, limit=per_split_limit):
+                    if not _entry_passes_filters(entry, ex):
+                        continue
                     text = _extract_text(ex, text_field)
                     if not text:
                         skipped_text += 1

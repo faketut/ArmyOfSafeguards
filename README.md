@@ -122,6 +122,7 @@ print(f"Individual Results: {result['individual_results']}")
 - Train a model: `python3 -m meta_classifier.train_meta --data training/meta/synthetic_meta_train.jsonl --n-folds 5 --calibrate temperature --out meta_classifier/artifacts/meta_lr.json`
 - End-to-end shell example: `training/teacher_dataset/run_teacher_meta_pipeline.sh`
 - Runtime: set `AOS_META_MODEL_PATH` to your artifact, or use the default path under `meta_classifier/artifacts/`.
+- Domain-aware runtime (optional): train one meta model per `domain` (e.g. `meta_lr_toxicity.json`) and set `AOS_META_MODEL_PATH_TOXICITY` / `AOS_META_MODEL_PATH_SEXUAL` / `AOS_META_MODEL_PATH_JAILBREAK` / `AOS_META_MODEL_PATH_MIXED`, or provide `AOS_META_MODEL_MAP_JSON` for routing.
 
 ## Testing & evaluation
 

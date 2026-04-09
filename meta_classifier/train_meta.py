@@ -108,6 +108,7 @@ def cross_val_oof(
     groups: Optional[np.ndarray],
     n_folds: int,
     seed: int,
+    class_weight: Optional[str],
 ) -> Tuple[np.ndarray, List[float]]:
     """
     Out-of-fold positive-class probabilities.
@@ -124,7 +125,7 @@ def cross_val_oof(
         splits = list(splitter.split(X, y))
 
     for train_idx, val_idx in splits:
-        clf = LogisticRegression(max_iter=2000, random_state=seed)
+        clf = LogisticRegression(max_iter=2000, random_state=seed, class_weight=class_weight)
         clf.fit(X[train_idx], y[train_idx])
         p = clf.predict_proba(X[val_idx])[:, 1]
         oof[val_idx] = p
@@ -166,6 +167,13 @@ def main() -> int:
         action="store_true",
         help="After CV, fit only on training part of a single train_test_split (not recommended for deployment)",
     )
+    parser.add_argument(
+        "--class-weight",
+        type=str,
+        choices=["none", "balanced"],
+        default="none",
+        help="LogisticRegression class_weight (default: none). Use balanced for heavy label imbalance.",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     args = parser.parse_args()
 
@@ -194,8 +202,10 @@ def main() -> int:
     temperature = 1.0
     oof_proba: Optional[np.ndarray] = None
 
+    class_weight = None if args.class_weight == "none" else "balanced"
+
     if args.n_folds and args.n_folds > 1:
-        oof_proba, fold_aucs = cross_val_oof(X, y, groups, args.n_folds, args.seed)
+        oof_proba, fold_aucs = cross_val_oof(X, y, groups, args.n_folds, args.seed, class_weight)
         print(f"OOF ROC-AUC (mean of folds): {np.nanmean(fold_aucs):.4f}")
         try:
             print(f"OOF ROC-AUC (micro on all OOF preds): {roc_auc_score(y, oof_proba):.4f}")
@@ -209,7 +219,7 @@ def main() -> int:
             print("OOF log-loss (raw vs calibrated):", log_loss(y, oof_proba), log_loss(y, p_cal))
 
     # Final fit
-    clf = LogisticRegression(max_iter=2000, random_state=args.seed)
+    clf = LogisticRegression(max_iter=2000, random_state=args.seed, class_weight=class_weight)
 
     if args.no_final_fit_all:
         X_train, X_test, y_train, y_test = train_test_split(

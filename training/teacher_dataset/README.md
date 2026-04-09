@@ -101,6 +101,33 @@ python training/teacher_dataset/label_manifest.py \
   --out training/meta/teacher_all_for_meta.jsonl
 ```
 
+### Manifest filters (optional)
+
+To increase the unsafe rate for hard domains (e.g. `toxicity`, `sexual`), you can pre-filter HF rows **before** running experts/teacher:
+
+- `filters_all`: all conditions must match
+- `filters_any`: at least one condition must match
+
+Each condition is:
+
+`{"field": "...", "op": "eq|neq|gt|ge|lt|le|in|contains", "value": ...}`
+
+Example (keep only the most toxic rows):
+
+```json
+{
+  "hf_id": "cglez/civil_comments_clean",
+  "splits": ["train"],
+  "text_field": "text",
+  "domain": "toxicity",
+  "filters_any": [
+    {"field": "toxicity", "op": "eq", "value": 1},
+    {"field": "severe_toxicity", "op": "eq", "value": 1},
+    {"field": "threat", "op": "eq", "value": 1}
+  ]
+}
+```
+
 Then train a unified meta policy:
 
 ```bash

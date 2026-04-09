@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional
 
 from aggregator.expert_runner import run_all_safeguards
-from meta_classifier.predict import meta_predict_proba
+from meta_classifier.predict import meta_predict_proba, meta_predict_proba_routed
 from policy.dynamic_threshold import context_from_dict
 from policy.triage import TriageConfig, triage_score
 from rules.engine import load_rule_engine_from_env, rules_enabled
@@ -22,6 +22,7 @@ def evaluate_text(
     threshold: float = 0.5,
     meta_model_path: Optional[str] = None,
     context: Optional[Dict[str, Any]] = None,
+    domain: str = "",
 ) -> Dict[str, Any]:
     rule_matches = []
     if rules_enabled():
@@ -42,7 +43,15 @@ def evaluate_text(
     experts = run_all_safeguards(text)
 
     try:
-        p_unsafe = meta_predict_proba(experts, artifact_path=meta_model_path)
+        d = domain or (context or {}).get("domain", "") if isinstance(context, dict) else domain
+        if isinstance(d, str) and d.strip():
+            p_unsafe = meta_predict_proba_routed(
+                experts,
+                domain=d,
+                fallback_artifact_path=meta_model_path,
+            )
+        else:
+            p_unsafe = meta_predict_proba(experts, artifact_path=meta_model_path)
     except Exception as e:
         # Fallback behavior: if meta model isn't available, remain conservative.
         p_unsafe = 0.5

@@ -24,6 +24,33 @@ python meta_classifier/train_meta.py \
   --calibrate temperature
 ```
 
+## Domain-aware meta (recommended for higher AUC)
+
+When training data mixes very different domains (e.g. `toxicity` + `sexual` + `jailbreak`), a single meta model can underperform under `GroupKFold(source)`.
+You can split and train one meta model per `domain`, then route at runtime.
+
+```bash
+python training/meta/split_jsonl_by_field.py \
+  --in training/meta/teacher_all_for_meta.jsonl \
+  --field domain \
+  --out-dir training/meta/splits_domain \
+  --min-rows 50
+
+# Example: train a toxicity-only meta model (repeat per domain file)
+python -m meta_classifier.train_meta \
+  --data training/meta/splits_domain/domain__toxicity.jsonl \
+  --n-folds 5 \
+  --group-field source \
+  --class-weight balanced \
+  --calibrate temperature \
+  --out meta_classifier/artifacts/meta_lr_toxicity.json
+```
+
+At runtime, you can route by domain using env vars:
+
+- `AOS_META_MODEL_PATH_TOXICITY`, `AOS_META_MODEL_PATH_SEXUAL`, `AOS_META_MODEL_PATH_JAILBREAK`, `AOS_META_MODEL_PATH_MIXED`
+- or `AOS_META_MODEL_MAP_JSON` (a JSON dict string mapping domain->path)
+
 ## Offline / CI without loading HF experts
 
 Use `synthetic_meta_train.jsonl` (checked in) to smoke-test `train_meta.py` without downloading models. For production, always generate `individual_results` from real experts.
