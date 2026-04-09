@@ -161,7 +161,8 @@ def main() -> int:
     ap.add_argument("--weight-decay", type=float, default=0.01)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--grad-accum", type=int, default=1)
-    ap.add_argument("--fp16", action="store_true")
+    ap.add_argument("--fp16", action="store_true", help="Use fp16 mixed precision (can be unstable on some stacks).")
+    ap.add_argument("--bf16", action="store_true", help="Use bf16 mixed precision (preferred when available).")
     ap.add_argument("--class-weight", type=str, choices=["none", "balanced"], default="balanced")
     ap.add_argument(
         "--lr-scheduler",
@@ -186,8 +187,17 @@ def main() -> int:
     ap.add_argument("--lora-r", type=int, default=8)
     ap.add_argument("--lora-alpha", type=int, default=16)
     ap.add_argument("--lora-dropout", type=float, default=0.05)
+    ap.add_argument(
+        "--max-grad-norm",
+        type=float,
+        default=1.0,
+        help="Gradient clipping norm. Set 0 to disable (workaround for some fp16 scaler issues).",
+    )
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
+
+    if args.fp16 and args.bf16:
+        raise SystemExit("Choose only one: --fp16 or --bf16")
 
     _seed_everything(int(args.seed))
 
@@ -367,6 +377,8 @@ def main() -> int:
             logging_steps=50,
             seed=int(args.seed),
             fp16=bool(args.fp16),
+            bf16=bool(args.bf16),
+            max_grad_norm=float(args.max_grad_norm),
             report_to=[],
         )
         try:
