@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import random
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -23,6 +24,9 @@ from transformers import (
 
 SEED = 42
 DEFAULT_BASE_MODEL = "distilroberta-base"
+
+# Ensure repo root import works when executed as a script from any cwd (e.g. Colab).
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 
 def _seed_everything(seed: int) -> None:
