@@ -129,16 +129,34 @@ def main() -> int:
     ap.add_argument("--output-dir", type=str, default="experts/artifacts/toxicity_ft")
     ap.add_argument("--epochs", type=float, default=2.0)
     ap.add_argument("--lr", type=float, default=2e-5)
+    ap.add_argument("--weight-decay", type=float, default=0.01)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--grad-accum", type=int, default=1)
     ap.add_argument("--fp16", action="store_true")
     ap.add_argument("--class-weight", type=str, choices=["none", "balanced"], default="balanced")
+    ap.add_argument(
+        "--lr-scheduler",
+        type=str,
+        choices=["linear", "cosine"],
+        default="cosine",
+        help="Learning-rate scheduler (default: cosine).",
+    )
+    ap.add_argument(
+        "--warmup-ratio",
+        type=float,
+        default=0.1,
+        help="Warmup ratio for scheduler (default: 0.1). Typical range 0.05-0.1.",
+    )
     ap.add_argument(
         "--target-train-pos-rate",
         type=float,
         default=0.0,
         help="If >0, resample TRAIN split to reach this positive rate by downsampling negatives (0 disables).",
     )
+    ap.add_argument("--lora", action="store_true", help="Enable LoRA adapters (requires `peft`).")
+    ap.add_argument("--lora-r", type=int, default=8)
+    ap.add_argument("--lora-alpha", type=int, default=16)
+    ap.add_argument("--lora-dropout", type=float, default=0.05)
     ap.add_argument("--seed", type=int, default=SEED)
     args = ap.parse_args()
 
@@ -251,6 +269,22 @@ def main() -> int:
         label2id={"LABEL_0": 0, "LABEL_1": 1},
     )
 
+    if args.lora:
+        try:
+            from peft import LoraConfig, TaskType, get_peft_model
+        except Exception as e:
+            raise SystemExit("LoRA requested but `peft` is not installed. Install with: pip install peft") from e
+
+        # RoBERTa-style attention modules usually contain "query"/"value" linear layers.
+        lora_cfg = LoraConfig(
+            task_type=TaskType.SEQ_CLS,
+            r=int(args.lora_r),
+            lora_alpha=int(args.lora_alpha),
+            lora_dropout=float(args.lora_dropout),
+            target_modules=["query", "value"],
+        )
+        model = get_peft_model(model, lora_cfg)
+
     def _tok(batch: Dict[str, List[Any]]) -> Dict[str, Any]:
         return tok(batch["text"], truncation=True, max_length=int(args.max_length))
 
@@ -279,10 +313,13 @@ def main() -> int:
         common = dict(
             output_dir=str(out_dir),
             learning_rate=float(args.lr),
+            weight_decay=float(args.weight_decay),
             per_device_train_batch_size=int(args.batch),
             per_device_eval_batch_size=int(args.batch),
             gradient_accumulation_steps=int(args.grad_accum),
             num_train_epochs=float(args.epochs),
+            lr_scheduler_type=str(args.lr_scheduler),
+            warmup_ratio=float(args.warmup_ratio),
             save_strategy="epoch",
             load_best_model_at_end=True,
             metric_for_best_model="roc_auc",
