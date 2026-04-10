@@ -82,6 +82,8 @@ python training/teacher_dataset/label_manifest.py \
   --out training/meta/pool_expert_q_for_meta.jsonl
 ```
 
+`manifest.example.json` is the only checked-in sample manifest here. Larger pools should be your own JSON with the same entry shape; each row needs a **non-empty** `text_field` (`label_manifest.py` does not infer text columns the way `training/meta/build_meta_from_hf_labels.py` does).
+
 ### Manifest filters (optional)
 
 To increase the unsafe rate for hard domains (e.g. `toxicity`, `sexual`), you can pre-filter HF rows **before** running experts:
