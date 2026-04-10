@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 from collections import Counter, defaultdict
 from typing import Any, Dict, Iterable, List, Mapping, Sequence, Tuple
 
@@ -12,20 +13,34 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 from experts.batching import batched_softmax_predict
 from experts.runtime import get_torch_device
 
-MODEL_ID = "faketut/x-sensitive-deberta-binary"
+DEFAULT_MODEL_ID = "faketut/x-sensitive-deberta-binary"
+MODEL_ID = DEFAULT_MODEL_ID
 
-_MODEL_CACHE: Tuple[AutoTokenizer, AutoModelForSequenceClassification] | None = None
+_MODEL_CACHE: Tuple[str, AutoTokenizer, AutoModelForSequenceClassification] | None = None
+
+
+def _model_id_from_env() -> str:
+    """
+    Override model id/path via env:
+      - AOS_SEXUAL_MODEL (preferred)
+      - AOS_SEXUAL_MODEL_ID (legacy)
+    """
+    v = os.environ.get("AOS_SEXUAL_MODEL", "").strip() or os.environ.get(
+        "AOS_SEXUAL_MODEL_ID", ""
+    ).strip()
+    return v or DEFAULT_MODEL_ID
 
 
 def _get_model() -> Tuple[AutoTokenizer, AutoModelForSequenceClassification]:
     global _MODEL_CACHE
-    if _MODEL_CACHE is None:
-        tok = AutoTokenizer.from_pretrained(MODEL_ID)
-        model = AutoModelForSequenceClassification.from_pretrained(MODEL_ID)
+    mid = _model_id_from_env()
+    if _MODEL_CACHE is None or _MODEL_CACHE[0] != mid:
+        tok = AutoTokenizer.from_pretrained(mid, use_fast=False)
+        model = AutoModelForSequenceClassification.from_pretrained(mid)
         model.eval()
         model.to(get_torch_device())
-        _MODEL_CACHE = (tok, model)
-    return _MODEL_CACHE
+        _MODEL_CACHE = (mid, tok, model)
+    return _MODEL_CACHE[1], _MODEL_CACHE[2]
 
 
 def predict(text: str) -> Dict[str, float]:

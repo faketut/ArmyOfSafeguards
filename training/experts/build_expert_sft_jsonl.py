@@ -8,7 +8,8 @@ No teacher models. Labels follow the plan:
   - positive_pools: task-specific positives (force or native_match).
   - negative_pools: task-specific negatives (other hazards may be labeled safe for this head).
 
-Use with training/toxicity/train.py --data <out.jsonl> --domain <expert>
+Use with the matching training entry point, e.g. training/factuality/train.py or training/sexual/train.py
+  (--data <out.jsonl>); training/toxicity/train.py also accepts --domain for other experts.
 """
 from __future__ import annotations
 

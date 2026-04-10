@@ -374,6 +374,10 @@ def run_training(args: argparse.Namespace) -> int:
         print("Runtime: set AOS_JAILBREAK_MODEL to this path (or upload and set HF id).")
     elif dom == "toxicity":
         print("Runtime: set AOS_TOXICITY_MODEL to this path (or HF id).")
+    elif dom == "factuality":
+        print("Runtime: set AOS_FACTUALITY_MODEL to this path (or HF id).")
+    elif dom == "sexual":
+        print("Runtime: set AOS_SEXUAL_MODEL to this path (or HF id).")
     return 0
 
 
