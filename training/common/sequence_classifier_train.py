@@ -211,6 +211,20 @@ def _best_eval_from_log_history(log_history: List[Dict[str, Any]]) -> Tuple[Opti
     return best_epoch, metrics, out_auc
 
 
+def _resolve_metrics_registry_path(args: argparse.Namespace) -> Tuple[str, Optional[Path]]:
+    """
+    Returns (status, resolved_path).
+    status: "disabled" | "enabled"
+    """
+    reg_raw = (getattr(args, "metrics_registry", "") or "").strip()
+    if bool(getattr(args, "no_metrics_registry", False)) or not reg_raw:
+        return "disabled", None
+    reg_path = Path(reg_raw)
+    if not reg_path.is_absolute():
+        reg_path = _REPO_ROOT / reg_path
+    return "enabled", reg_path
+
+
 def _append_sft_metrics_registry(
     path: Path,
     *,
@@ -258,8 +272,15 @@ def _append_sft_metrics_registry(
         "metrics": metrics,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(record, ensure_ascii=False) + "\n"
     with path.open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record, ensure_ascii=False) + "\n")
+        f.write(payload)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except Exception:
+            # Some filesystems may not support fsync; best-effort only.
+            pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -322,6 +343,8 @@ def run_training(args: argparse.Namespace) -> int:
     _seed_everything(int(args.seed))
 
     dom = str(args.domain or "").strip().lower()
+    reg_status, reg_resolved = _resolve_metrics_registry_path(args)
+    print(f"[metrics] registry={reg_status} raw={str(getattr(args, 'metrics_registry', ''))!r} resolved={str(reg_resolved) if reg_resolved else ''}")
 
     rows: List[Dict[str, Any]] = []
     if args.hf_manifest.strip():
@@ -514,16 +537,13 @@ def run_training(args: argparse.Namespace) -> int:
     print(f"[data] train_pos_rate={train_pos_rate:.4f} valid_pos_rate={valid_pos_rate:.4f}")
     trainer.train()
 
-    reg_raw = (args.metrics_registry or "").strip()
-    if bool(args.no_metrics_registry) or not reg_raw:
-        print(f"[metrics] registry disabled (no_metrics_registry={bool(args.no_metrics_registry)} path={reg_raw!r})")
+    if reg_resolved is None:
+        # Already printed status above.
+        pass
     else:
-        reg_path = Path(reg_raw)
-        if not reg_path.is_absolute():
-            reg_path = _REPO_ROOT / reg_path
         try:
             _append_sft_metrics_registry(
-                reg_path,
+                reg_resolved,
                 args=args,
                 trainer=trainer,
                 train_n=train_n,
@@ -531,7 +551,7 @@ def run_training(args: argparse.Namespace) -> int:
                 train_pos_rate=train_pos_rate,
                 valid_pos_rate=valid_pos_rate,
             )
-            print(f"[metrics] appended run to registry: {reg_path}")
+            print(f"[metrics] appended run to registry: {reg_resolved}")
         except Exception as e:
             print(f"[metrics] warning: could not append metrics registry: {e}")
             print(traceback.format_exc())
