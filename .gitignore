@@ -61,3 +61,4 @@ evaluation/benchmark_*.json
 training/meta/teacher_*.csv
 training/meta/_smoke*.jsonl
 training/meta/_last_gen.log
+training/meta/_expert_feat.log
