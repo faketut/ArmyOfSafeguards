@@ -7,6 +7,7 @@ import os
 import random
 import subprocess
 import sys
+import traceback
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -514,7 +515,9 @@ def run_training(args: argparse.Namespace) -> int:
     trainer.train()
 
     reg_raw = (args.metrics_registry or "").strip()
-    if reg_raw and not bool(args.no_metrics_registry):
+    if bool(args.no_metrics_registry) or not reg_raw:
+        print(f"[metrics] registry disabled (no_metrics_registry={bool(args.no_metrics_registry)} path={reg_raw!r})")
+    else:
         reg_path = Path(reg_raw)
         if not reg_path.is_absolute():
             reg_path = _REPO_ROOT / reg_path
@@ -531,6 +534,7 @@ def run_training(args: argparse.Namespace) -> int:
             print(f"[metrics] appended run to registry: {reg_path}")
         except Exception as e:
             print(f"[metrics] warning: could not append metrics registry: {e}")
+            print(traceback.format_exc())
 
     trainer.save_model(str(out_dir))
     tok.save_pretrained(str(out_dir))
