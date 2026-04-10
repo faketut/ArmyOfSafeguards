@@ -1,222 +1,119 @@
 # Army of Safeguards
 
-A modular, research-friendly collection of **AI safety “safeguards”** (specialized detectors) for flagging harmful or problematic content, plus an **aggregator** that runs multiple safeguards and returns a unified safety assessment.
+A modular research stack of **safeguard experts** (specialized detectors for toxicity, sexual/sensitive content, jailbreak attempts, and factuality) plus **aggregators** that fuse expert outputs into a single safety verdict. Optional **meta-classifiers** learn a policy over expert probabilities; **benchmarks** and **training** tooling live in-repo.
 
+## Architecture
 
-## Badges
+High-level runtime path: text passes through parallel **experts**, then an **aggregator** (threshold, weighted sum, or learned meta-model) produces `is_safe`, confidences, and per-expert `individual_results`.
 
-- **Python**: 3.9+
-- **Status**: active development
-- **License**: TBD (see [License](#license))
+```mermaid
+flowchart LR
+  T[Text prompt] --> ER[expert_runner]
+  ER --> IR[individual_results]
+  IR --> AGG{Aggregator}
+  AGG -->|base| BA[base_aggregator]
+  AGG -->|weighted| WA[weighted_aggregator]
+  AGG -->|meta| MA[meta_aggregator]
+  MA --> FB[feature_builder]
+  FB --> MP[meta predict]
+  BA --> OUT[Unified result]
+  WA --> OUT
+  MP --> OUT
+```
 
-## Key features
+`expert_runner` invokes the four heads in **experts/** (factuality, toxicity, sexual, jailbreak) and packs their outputs into `individual_results`. Runtime selects **one** aggregator. The **meta** path maps those features through `meta_classifier` before returning the same style of result as base/weighted.
 
-- **Modular experts**: separate safeguards for factuality, sexual/sensitive content, toxicity, and jailbreak attempts
-- **Unified API**: a single `evaluate_text(...)` call to run all safeguards together
-- **CLI-friendly**: run individual experts or the aggregator from the command line
-- **Benchmarking & evaluation**: [`evaluation/run_benchmark.py`](evaluation/run_benchmark.py) against public HF safety benchmarks (see [`evaluation/README.md`](evaluation/README.md))
+Offline **data and training** flow (native labels, expert-Q features, meta training):
+
+```mermaid
+flowchart LR
+  subgraph data [Data]
+    HF[HuggingFace datasets]
+    CV[curriculum_native.yaml]
+  end
+
+  subgraph build [training/]
+    BSF[experts/build_expert_sft_jsonl.py]
+    SCT[common/sequence_classifier_train.py]
+    BMH[meta/build_meta_from_hf_labels.py]
+    GEF[meta/generate_expert_features.py]
+    TD[teacher_dataset/]
+  end
+
+  subgraph artifacts [Artifacts]
+    SFT[experts/artifacts/*_ft]
+    META[meta_classifier/artifacts]
+  end
+
+  HF --> BSF
+  CV --> BSF
+  BSF --> SCT
+  SCT --> SFT
+  HF --> BMH
+  BMH --> GEF
+  TD --> GEF
+  GEF --> META
+```
+
+## Components
+
+| Area | Role |
+|------|------|
+| [`experts/`](experts/) | Per-head `predict()` / `predict_batch()`; load DeBERTa (or similar) checkpoints; env overrides like `AOS_TOXICITY_MODEL`. |
+| [`aggregator/`](aggregator/) | `expert_runner` batches all experts; `base` / `weighted` / `meta` aggregators map logits to a unified verdict. |
+| [`meta_classifier/`](meta_classifier/) | Feature vectors from `individual_results`, logistic or tabular models, calibration; `AOS_META_MODEL_PATH`. |
+| [`policy/`](policy/) | Triage and dynamic thresholds. |
+| [`rules/`](rules/) | Optional rule engine hooks. |
+| [`evaluation/`](evaluation/) | Public HF benchmarks via `run_benchmark.py`. |
+| [`training/`](training/) | SFT entry points per expert, meta JSONL builders, shared `hf_datasets.load_hf_split`. |
 
 ## Project layout
 
 ```
 ArmyOfSafeguards/
-├── experts/                 # Expert safeguards (specialized detectors)
-│   ├── factuality.py
-│   ├── toxicity.py
-│   ├── sexual.py
-│   ├── jailbreak.py
-│   └── __init__.py
-├── aggregator/              # Unified interface + weighted / meta aggregation
-│   ├── aggregator.py
-│   └── README.md
-├── meta_classifier/         # Learned meta-models over expert outputs (LR / XGB / MLP)
-├── policy/                  # Thresholds & triage
-├── rules/                   # Optional rule engine
-├── wrappers/                # Shared utilities for external model wrappers
-├── evaluation/              # HF benchmark harness — see evaluation/README.md
-├── benchmark/               # Thin shim: forwards to evaluation/run_benchmark.py
-├── training/                # Training & data — see training/README.md
-│   ├── common/              # Shared sequence-classifier training
-│   ├── experts/             # Native curriculum → SFT JSONL builders
-│   ├── jailbreak/           # Jailbreak expert fine-tune entry
-│   ├── toxicity/
-│   ├── meta/                # Meta JSONL, manifests, utilities
-│   └── teacher_dataset/     # Optional teacher-label pipelines
-├── docs/                    # Design & expert docs
-│   ├── experts/
-│   ├── meta_training_labeling.md
-│   └── experts_training_status.md
+├── experts/              # Safeguard models (factuality, toxicity, sexual, jailbreak)
+├── aggregator/           # expert_runner + base / weighted / meta aggregators
+├── meta_classifier/      # Features, train_meta, predict, artifacts
+├── policy/               # Triage and thresholds
+├── rules/                # Optional rules engine
+├── wrappers/             # env, logging, shared utils
+├── evaluation/           # Benchmark harness (HF datasets)
+├── benchmark/            # Shim to evaluation/run_benchmark.py
+├── training/             # SFT, meta JSONL, teacher_dataset, common/
+├── docs/                 # Design notes
 ├── requirements.txt
 └── README.md
 ```
 
-## Getting started
+## Documentation and entry points
 
-### Install
+- **Training & SFT:** [`training/README.md`](training/README.md)
+- **Benchmarks:** [`evaluation/README.md`](evaluation/README.md)
+- **Meta labeling schema:** [`docs/meta_training_labeling.md`](docs/meta_training_labeling.md)
+- **Expert status:** [`docs/experts_training_status.md`](docs/experts_training_status.md)
+
+## Getting started
 
 ```bash
 git clone https://github.com/SohamNagi/ArmyOfSafeguards.git
 cd ArmyOfSafeguards
-
-python3 -m venv venv
-source venv/bin/activate  # Windows: venv\Scripts\activate
-
+python -m venv venv
+# Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### Quick usage (CLI)
-
-Run an individual safeguard:
+Run the unified aggregator CLI:
 
 ```bash
-python experts/factuality.py "The Earth is flat."
-python experts/sexual.py "Your text to evaluate"
-python experts/toxicity.py "Your text to evaluate"
-python experts/jailbreak.py "Your text to evaluate"
+python aggregator/aggregator.py "Your text to evaluate"
 ```
 
-Run the aggregator (all safeguards):
+## Requirements
 
-```bash
-python aggregator/aggregator.py "Your text to evaluate here"
-```
-
-### Quick usage (Python)
-
-Individual expert:
-
-```python
-from experts.toxicity import predict
-
-result = predict("Hello, how are you?")
-print(f"Label: {result['label']}, Confidence: {result['confidence']:.2%}")
-```
-
-Aggregator:
-
-```python
-from aggregator.aggregator import evaluate_text
-
-result = evaluate_text("Your text here", threshold=0.7)
-print(f"Is Safe: {result['is_safe']}")
-print(f"Individual Results: {result['individual_results']}")
-```
-
-## Included safeguards
-
-- **Factuality safeguard (Ajith)**
-  - **Model**: `ajith-bondili/deberta-v3-factuality-small`
-  - **Docs**: `docs/experts/factuality.md`
-- **Sexual / sensitive-content safeguard (Jian)**
-  - **Model**: `faketut/x-sensitive-deberta-binary`
-  - **Docs**: `docs/experts/sexual.md`
-- **Toxicity safeguard (Soham)**
-  - **Model**: `SohamNagi/tiny-toxicity-classifier`
-  - **Docs**: `docs/experts/toxicity.md`
-- **Jailbreak safeguard (Tommy)**
-  - **Model**: `tommypang04/finetuned-model-jailbrak`
-  - **Docs**: `docs/experts/jailbreak.md`
-
-## Meta aggregator training
-
-- **Training index**: [training/README.md](training/README.md)
-- **Expert / training status**: [docs/experts_training_status.md](docs/experts_training_status.md)
-- **Labeling & schema**: [docs/meta_training_labeling.md](docs/meta_training_labeling.md)
-- **Pipeline & commands**: [training/meta/README.md](training/meta/README.md)
-- **Expert-Q–labeled data (Q₁…Q₄ + label)**: [training/teacher_dataset/README.md](training/teacher_dataset/README.md) — run `training/teacher_dataset/generate_teacher_labeled_dataset.py` (labels from max expert P(unsafe) vs `--threshold`), then `train_meta` on `--output-meta-jsonl`.
-- Train a model: `python3 -m meta_classifier.train_meta --data training/meta/synthetic_meta_train.jsonl --n-folds 5 --calibrate temperature --out meta_classifier/artifacts/meta_lr.json`
-- End-to-end shell example: `training/teacher_dataset/run_teacher_meta_pipeline.sh`
-- Runtime: set `AOS_META_MODEL_PATH` to your artifact, or use the default path under `meta_classifier/artifacts/`.
-- Domain-aware runtime (optional): train one meta model per `domain` (e.g. `meta_lr_toxicity.json`) and set `AOS_META_MODEL_PATH_TOXICITY` / `AOS_META_MODEL_PATH_SEXUAL` / `AOS_META_MODEL_PATH_JAILBREAK` / `AOS_META_MODEL_PATH_MIXED`, or provide `AOS_META_MODEL_MAP_JSON` for routing.
-
-## Testing & evaluation
-
-Each safeguard includes runnable tests/evaluators. Example commands:
-
-```bash
-python experts/tests/factuality/quick_test.py
-python experts/tests/sexual/quick_test.py
-python experts/tests/toxicity/quick_test.py
-python experts/tests/jailbreak/quick_test.py
-```
-
-### Reported results (from this repo)
-
-**Factuality safeguard**
-
-Model trained on TruthfulQA & FEVER; OOD datasets are most indicative of generalization.
-
-| Dataset | Accuracy | F1-Score | Domain |
-|---------|----------|----------|--------|
-| VitaminC | 54.00% | 36.11% | General claims |
-| Climate-FEVER | 81.00% | - | Climate-specific |
-| LIAR | 81.00% | - | Political statements |
-
-Sanity check on training-domain datasets:
-
-| Dataset | Accuracy | F1-Score |
-|---------|----------|----------|
-| FEVER | 84.00% | 78.38% |
-| TruthfulQA | 75.00% | - |
-
-**Sexual / sensitive-content safeguard**
-
-| Metric | Score |
-|--------|-------|
-| Accuracy | 82.6% |
-| F1-Score | 82.9% |
-
-**Toxicity safeguard (ToxiGen)**
-
-| Metric | Score |
-|--------|-------|
-| Accuracy | 79.00% |
-| Precision | 75.00% |
-| Recall | 69.23% |
-| F1-Score | 72.00% |
-
-**Jailbreak safeguard**
-
-| Metric | Score |
-|--------|-------|
-| Accuracy | 94.8248% |
-| F1-Score | 65.7143% |
-
-### Benchmarks & datasets
-
-- **Individual safeguard datasets**
-  - **Factuality**: TruthfulQA, FEVER, SciFact, VitaminC, Climate-FEVER
-  - **Sexual**: CardiffNLP x_sensitive
-  - **Toxicity**: ToxiGen, hate_speech18, civil_comments
-  - **Jailbreak**: JBB-Behaviors
-- **System benchmarks**
-  - **Jailbreak & harmful-content robustness**: [HarmBench](https://huggingface.co/datasets/walledai/HarmBench), [JailbreakBench](https://huggingface.co/datasets/JailbreakBench/JBB-Behaviors)
-  - **Moderation / guardrail benchmarks**: [WildGuardMix](https://huggingface.co/datasets/allenai/wildguardmix)
-  - **Broader safety suites**: [HELM Safety](https://crfm.stanford.edu/helm/safety/latest/)
-
-## Contributing
-
-Contributions are welcome. The main extension point is adding new safeguards that follow the same minimal interface used across the repo.
-
-- **Add a new safeguard**
-  - Create a new expert module (e.g., `experts/my_guard.py` or a new folder if needed).
-  - Implement `predict()` returning `{"label": str, "confidence": float}`.
-  - Wire it into the aggregator so it participates in `evaluate_text(...)`.
-  - Add tests and documentation under `docs/experts/`.
-
-If you’re making a larger change (new aggregator strategy, new benchmark suite, refactors), please include a short write-up in the PR describing motivation and evaluation.
-
-## Security
-
-If you discover a vulnerability or an issue that could lead to unsafe behavior in downstream usage, please open an issue with a minimal reproduction and clearly label it **security**.
+- Python 3.9+
+- PyTorch and Hugging Face `transformers` / `datasets` (see [`requirements.txt`](requirements.txt))
+- For gated Hub datasets or models: `huggingface-cli login` or `HF_TOKEN`
 
 ## License
 
-This repository currently has **no finalized license text** in `README.md`. Add a standard OSS license file (e.g., MIT/Apache-2.0) and update this section accordingly.
-
-## Team
-
-- **Ajith**: Factuality safeguard
-- **Soham**: Toxicity safeguard
-- **Jian**: Sexual/sensitive-content safeguard
-- **Tommy**: Jailbreak safeguard
+TBD.
