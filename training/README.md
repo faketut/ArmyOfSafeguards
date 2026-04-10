@@ -4,13 +4,11 @@ Entry points for fine-tuning experts, building meta-aggregator data, and running
 
 | Path | Purpose |
 |------|---------|
-| [meta/README.md](meta/README.md) | Meta JSONL schema helpers, synthetic data, `generate_expert_features.py`, `train_meta` / **native HF** meta build |
+| [meta/README.md](meta/README.md) | Native HF meta (`build_meta_from_hf_labels.py`), expert-Q heuristic meta (`generate_expert_q_meta_jsonl.py`, `run_expert_q_meta_pipeline.sh`), `generate_expert_features.py`, `train_meta` |
 | [experts/curriculum_native.yaml](experts/curriculum_native.yaml) | Per-expert **native-label** pools (jailbreak / toxicity / sexual / factuality) — no teacher |
 | [experts/build_expert_sft_jsonl.py](experts/build_expert_sft_jsonl.py) | Build SFT JSONL from the curriculum (`--expert`, optional `--target-train-pos-rate`) |
 | [common/sequence_classifier_train.py](common/sequence_classifier_train.py) | Shared HF Trainer loop used by expert `train.py` entry points below |
 | [common/hf_datasets.py](common/hf_datasets.py) | `load_hf_split` — loads splits without deprecated `trust_remote_code`; **FEVER** uses Hub `refs/convert/parquet` (no script) |
-| [teacher_dataset/README.md](teacher_dataset/README.md) | **Q-values** (per-expert P(unsafe)) + in-repo binary label (max-Q vs threshold) → CSV + meta-ready JSONL |
-| [teacher_dataset/run_teacher_meta_pipeline.sh](teacher_dataset/run_teacher_meta_pipeline.sh) | One-shot: teacher-labeled JSONL → `meta_classifier/artifacts/meta_lr.json` |
 | [jailbreak/train.py](jailbreak/train.py) | Fine-tune jailbreak expert from curriculum JSONL (`AOS_JAILBREAK_MODEL` at runtime) |
 | [toxicity/train.py](toxicity/train.py) | Fine-tune toxicity on JSONL or `--hf-manifest` (`AOS_TOXICITY_MODEL` at runtime) |
 | [factuality/train.py](factuality/train.py) | Fine-tune factuality from curriculum JSONL (`AOS_FACTUALITY_MODEL` at runtime) |
@@ -23,7 +21,7 @@ Entry points for fine-tuning experts, building meta-aggregator data, and running
 
 ```bash
 export LIMIT=500   # optional cap for iteration
-./training/teacher_dataset/run_teacher_meta_pipeline.sh
+./training/meta/run_expert_q_meta_pipeline.sh
 ```
 
 ### Native experts + unified meta

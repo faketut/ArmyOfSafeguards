@@ -37,7 +37,7 @@ flowchart LR
     SCT[common/sequence_classifier_train.py]
     BMH[meta/build_meta_from_hf_labels.py]
     GEF[meta/generate_expert_features.py]
-    TD[teacher_dataset/]
+    GEQQ[meta/generate_expert_q_meta_jsonl.py]
   end
 
   subgraph artifacts [Artifacts]
@@ -51,7 +51,7 @@ flowchart LR
   SCT --> SFT
   HF --> BMH
   BMH --> GEF
-  TD --> GEF
+  GEQQ --> GEF
   GEF --> META
 ```
 
@@ -79,7 +79,7 @@ ArmyOfSafeguards/
 ├── wrappers/             # env, logging, shared utils
 ├── evaluation/           # Benchmark harness (HF datasets)
 ├── benchmark/            # Shim to evaluation/run_benchmark.py
-├── training/             # SFT, meta JSONL, teacher_dataset, common/
+├── training/             # SFT, meta JSONL + expert-Q builders, common/
 ├── docs/                 # Design notes
 ├── requirements.txt
 └── README.md

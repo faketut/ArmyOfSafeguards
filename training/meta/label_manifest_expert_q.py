@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Batch teacher-label multiple datasets and emit a single meta-training JSONL.
+Batch multiple HF datasets and emit one meta-training JSONL with expert-Q heuristic labels.
 
 Each manifest entry loads a Hugging Face dataset, extracts a text field, runs:
   1) all experts -> individual_results
-  2) binary label from max expert P(unsafe) (same Q features as meta_classifier; no external teacher)
+  2) binary label from max expert P(unsafe) vs --threshold (not the dataset's native label)
 
 Output rows are compatible with `python -m meta_classifier.train_meta`.
 
@@ -84,16 +84,10 @@ def _match_filter(ex: Dict[str, Any], flt: Dict[str, Any]) -> bool:
         if isinstance(ex_val, (list, tuple, set)):
             return val in ex_val
         return False
-    # Unknown op: do not match
     return False
 
 
 def _entry_passes_filters(entry: Dict[str, Any], ex: Dict[str, Any]) -> bool:
-    """
-    Optional manifest fields:
-      - "filters_all": [filter, ...] (all must pass)
-      - "filters_any": [filter, ...] (at least one must pass)
-    """
     all_filters = entry.get("filters_all", [])
     any_filters = entry.get("filters_any", [])
 
@@ -169,17 +163,11 @@ def _load_manifest(path: Path) -> List[Dict[str, Any]]:
 
 
 def _entry_get_dataset_id(entry: Dict[str, Any]) -> str:
-    # Support both schemas:
-    # - our original: { "dataset": "org/name", ... }
-    # - repo manifest: { "hf_id": "org/name", ... }
     v = entry.get("dataset") or entry.get("hf_id") or ""
     return str(v).strip()
 
 
 def _entry_get_splits(entry: Dict[str, Any]) -> List[str]:
-    # Support:
-    # - "split": "train"
-    # - "splits": ["train","test"]
     if "splits" in entry and isinstance(entry["splits"], list):
         out = [str(s).strip() for s in entry["splits"] if str(s).strip()]
         return out or ["train"]
@@ -188,9 +176,6 @@ def _entry_get_splits(entry: Dict[str, Any]) -> List[str]:
 
 
 def _entry_get_limit(entry: Dict[str, Any]) -> Optional[int]:
-    # Support:
-    # - "limit": 500
-    # - "status_in_repo": { "limit_used": 500 }
     if isinstance(entry.get("limit"), (int, float)):
         return int(entry["limit"])
     status = entry.get("status_in_repo")
@@ -253,7 +238,6 @@ def main() -> int:
             if args.max_per_dataset is not None:
                 base_limit = args.max_per_dataset if base_limit is None else min(base_limit, args.max_per_dataset)
 
-            # Prefer explicit source; else use the richer `hf_id` if present; else dataset.
             source_default = str(entry.get("hf_id", "")).strip() or dataset
             source = str(entry.get("source", source_default)).strip() or source_default
             domain = str(entry.get("domain", "")).strip()
@@ -308,7 +292,6 @@ def main() -> int:
                     if language:
                         row["language"] = language
 
-                    # carry over a stable id if available
                     for kid in ("id", "idx"):
                         if kid in ex and ex[kid] is not None:
                             row["id"] = str(ex[kid])
@@ -333,4 +316,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

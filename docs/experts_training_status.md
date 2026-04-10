@@ -17,7 +17,7 @@ Each expert is a **small HF sequence-classification model** (or boolean jailbrea
 
 - **Input features**: per-expert \(P(\text{unsafe})\) (+ optional rules flag). See `meta_classifier/feature_builder.py`.
 - **Training**: `python3 -m meta_classifier.train_meta --data <jsonl> ...`
-- **Recommended data**: JSONL with `individual_results` + `label`, where `label` is human, dataset-native (see `training/meta/build_meta_from_hf_labels.py`), or from the in-repo **expert-Q heuristic** in `training/teacher_dataset/generate_teacher_labeled_dataset.py`.
+- **Recommended data**: JSONL with `individual_results` + `label`. Prefer **dataset-native** labels via `training/meta/build_meta_from_hf_labels.py`; optionally use the **expert-Q heuristic** (`training/meta/generate_expert_q_meta_jsonl.py`) when native labels are insufficient.
 
 ## Suggested “finish training” order
 

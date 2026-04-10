@@ -183,7 +183,7 @@ def main() -> int:
     if not rows:
         raise SystemExit(
             f"No rows loaded from {str(data_path)!r} (empty file or only blank lines). "
-            f"Run label_manifest first and ensure it prints a positive 'Wrote N rows' count."
+            f"Run training/meta/label_manifest_expert_q.py or generate_expert_q_meta_jsonl.py first and ensure a positive row count."
         )
     X, y, _, groups = build_dataset(
         rows, spec=spec, label_field=args.label_field, group_field=args.group_field

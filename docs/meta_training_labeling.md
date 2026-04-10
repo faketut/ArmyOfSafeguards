@@ -31,7 +31,7 @@ Runtime aggregation (`policy/triage.py`) maps a scalar \(P(\text{unsafe})\) to:
   - label it `unsafe` if your policy counts review as a positive hit, or
   - label it `safe` and rely on triage at inference — **pick one policy and stay consistent**.
 
-Document your choice in the dataset README.
+Document your choice in `training/meta/README.md` (or your project docs).
 
 ## Recommended fields per JSONL row
 

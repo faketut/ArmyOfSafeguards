@@ -59,7 +59,7 @@ def _parse_label(v: Any) -> int:
     raise ValueError(f"bad label: {v!r}")
 
 
-def _load_teacher_jsonl(path: Path, *, domain: str) -> List[Dict[str, Any]]:
+def _load_labeled_jsonl(path: Path, *, domain: str) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     dom = domain.strip().lower()
     with path.open("r", encoding="utf-8") as f:
@@ -234,7 +234,7 @@ def run_training(args: argparse.Namespace) -> int:
     else:
         if not args.data.strip():
             raise SystemExit("Provide --data or --hf-manifest")
-        rows = _load_teacher_jsonl(Path(args.data), domain=args.domain)
+        rows = _load_labeled_jsonl(Path(args.data), domain=args.domain)
         if not rows:
             raise SystemExit("no rows loaded for domain")
         ds_all = _to_dataset(rows, text_field=args.text_field, label_field=args.label_field)

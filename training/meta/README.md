@@ -5,7 +5,7 @@
 1. **Label data** — Follow [docs/meta_training_labeling.md](../../docs/meta_training_labeling.md).
 2. **Seed JSONL** — `seed_meta_train.jsonl`: rows with `text`, `label`, optional `id` / `domain` / `source`.
 3. **Expert features** — Run `generate_expert_features.py` to append `individual_results` (calls all experts).
-4. **Optional: expert-Q labels** — Use [../teacher_dataset/README.md](../teacher_dataset/README.md) to build CSV / meta JSONL from the four experts plus a **max-Q threshold** label. If you already have **human `label`** in JSONL, use `generate_expert_features.py` only — see `seed_meta_train_with_experts.jsonl` (generated from `seed_meta_train.jsonl`).
+4. **Optional: expert-Q heuristic labels** — Use [`generate_expert_q_meta_jsonl.py`](generate_expert_q_meta_jsonl.py) / [`label_manifest_expert_q.py`](label_manifest_expert_q.py) (same folder) to build meta JSONL with **max expert P(unsafe) ≥ threshold** (not native HF labels). If you already have **human `label`** in JSONL, use `generate_expert_features.py` only — see `seed_meta_train_with_experts.jsonl`.
 5. **Train meta** — `python -m meta_classifier.train_meta --data ...` (see [meta_classifier/train_meta.py](../../meta_classifier/train_meta.py) for OOF and calibration flags), or **tabular** models: [meta_classifier/train_meta_tabular.py](../../meta_classifier/train_meta_tabular.py) (`--algo xgb|mlp`, writes a directory with `manifest.json`).
 6. **Point runtime at the artifact** — Set `AOS_META_MODEL_PATH` to a **JSON file** (legacy logistic, e.g. `meta_lr.json`) or a **directory** containing `manifest.json` (XGBoost / MLP from `train_meta_tabular.py`). [meta_classifier/predict.py](../../meta_classifier/predict.py) loads both.
 
@@ -22,6 +22,48 @@ python training/meta/build_meta_from_hf_labels.py --datasets-manifest training/m
 ```
 
 JBB-Behaviors needs split names `harmful` / `benign` in the manifest so labels resolve correctly.
+
+### Expert-Q heuristic meta (optional)
+
+Use this when you want meta supervision aligned with **runtime Q features**, or when native labels are weak. **Do not** use it when you need **dataset-original** safe/unsafe semantics — use `build_meta_from_hf_labels.py` above instead.
+
+| Script | Role |
+|--------|------|
+| [`expert_q_label.py`](expert_q_label.py) | `label_from_expert_q(...)` helper |
+| [`generate_expert_q_meta_jsonl.py`](generate_expert_q_meta_jsonl.py) | Local JSONL or single HF dataset → CSV / full JSONL / `train_meta`-ready JSONL |
+| [`label_manifest_expert_q.py`](label_manifest_expert_q.py) | Multi-dataset manifest → one merged meta JSONL |
+| [`run_expert_q_meta_pipeline.sh`](run_expert_q_meta_pipeline.sh) | One-shot: seed JSONL → expert-Q meta JSONL → `train_meta` |
+
+From a local JSONL with a `text` field:
+
+```bash
+python3 training/meta/generate_expert_q_meta_jsonl.py \
+  --input-jsonl training/meta/seed_meta_train.jsonl \
+  --text-field text \
+  --threshold 0.5 \
+  --output-csv training/meta/expert_q_labels.csv \
+  --output-jsonl training/meta/expert_q_full.jsonl \
+  --output-meta-jsonl training/meta/expert_q_for_meta.jsonl
+```
+
+Batch HF datasets ([`manifest.expert_q.example.json`](manifest.expert_q.example.json)):
+
+```bash
+python training/meta/label_manifest_expert_q.py \
+  --manifest training/meta/manifest.expert_q.example.json \
+  --threshold 0.5 \
+  --require-expert-outputs \
+  --out training/meta/pool_expert_q_for_meta.jsonl
+```
+
+One-shot pipeline (env: `INPUT_JSONL`, `META_OUT`, `ARTIFACT_OUT`, `LIMIT`, `THRESHOLD`, `N_FOLDS`, `CALIBRATE`, `GROUP_FIELD`):
+
+```bash
+LIMIT=200 ./training/meta/run_expert_q_meta_pipeline.sh
+THRESHOLD=0.45 GROUP_FIELD=source LIMIT=500 ./training/meta/run_expert_q_meta_pipeline.sh
+```
+
+**Breaking change:** scripts previously under `training/teacher_dataset/` now live in this folder. Map: `generate_teacher_labeled_dataset.py` → `generate_expert_q_meta_jsonl.py`, `label_manifest.py` → `label_manifest_expert_q.py`, `run_teacher_meta_pipeline.sh` → `run_expert_q_meta_pipeline.sh`, `manifest.example.json` → `manifest.expert_q.example.json`. See also [`../teacher_dataset/README.md`](../teacher_dataset/README.md).
 
 ## Quick commands
 
