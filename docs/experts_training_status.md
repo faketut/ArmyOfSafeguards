@@ -13,6 +13,10 @@ Each expert is a **small HF sequence-classification model** (or boolean jailbrea
 
 **Nothing is “missing weights” at runtime** as long as Hugging Face can download these checkpoints. “Finishing training” usually means **your own** fine-tunes on domain data, or **distillation** from a stronger external moderator (outside this repo).
 
+### SFT metrics log (all experts)
+
+Each run of `training/common/sequence_classifier_train.py` (via `training/<expert>/train.py`) appends **one JSON line** to `training/experts/sft_metrics.jsonl` by default: validation **roc_auc**, **ap** (PR-AUC), **f1** (at 0.5 threshold), split sizes, pos rates, hyperparameters, `output_dir`, and `git_commit` when available. Use `--no-metrics-registry` to skip, or `--metrics-registry PATH` for another file. Summarize: `python training/experts/summarize_sft_metrics.py`. Schema sample: `training/experts/sft_metrics.example.jsonl`.
+
 ## Meta-classifier
 
 - **Input features**: per-expert \(P(\text{unsafe})\) (+ optional rules flag). See `meta_classifier/feature_builder.py`.

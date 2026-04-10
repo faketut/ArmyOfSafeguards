@@ -7,7 +7,9 @@ Entry points for fine-tuning experts, building meta-aggregator data, and running
 | [meta/README.md](meta/README.md) | Native HF meta (`build_meta_from_hf_labels.py`), expert-Q heuristic meta (`generate_expert_q_meta_jsonl.py`, `run_expert_q_meta_pipeline.sh`), `generate_expert_features.py`, `train_meta` |
 | [experts/curriculum_native.yaml](experts/curriculum_native.yaml) | Per-expert **native-label** pools (jailbreak / toxicity / sexual / factuality) — no teacher |
 | [experts/build_expert_sft_jsonl.py](experts/build_expert_sft_jsonl.py) | Build SFT JSONL from the curriculum (`--expert`, optional `--target-train-pos-rate`) |
-| [common/sequence_classifier_train.py](common/sequence_classifier_train.py) | Shared HF Trainer loop used by expert `train.py` entry points below |
+| [common/sequence_classifier_train.py](common/sequence_classifier_train.py) | Shared HF Trainer loop; appends validation **roc_auc / ap / f1** to [`experts/sft_metrics.jsonl`](experts/sft_metrics.jsonl) unless `--no-metrics-registry` |
+| [experts/summarize_sft_metrics.py](experts/summarize_sft_metrics.py) | Print a comparison table from `sft_metrics.jsonl` |
+| [experts/sft_metrics.example.jsonl](experts/sft_metrics.example.jsonl) | Example JSONL schema for one SFT run |
 | [common/hf_datasets.py](common/hf_datasets.py) | `load_hf_split` — loads splits without deprecated `trust_remote_code`; **FEVER** uses Hub `refs/convert/parquet` (no script) |
 | [jailbreak/train.py](jailbreak/train.py) | Fine-tune jailbreak expert from curriculum JSONL (`AOS_JAILBREAK_MODEL` at runtime) |
 | [toxicity/train.py](toxicity/train.py) | Fine-tune toxicity on JSONL or `--hf-manifest` (`AOS_TOXICITY_MODEL` at runtime) |
