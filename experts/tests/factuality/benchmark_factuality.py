@@ -10,8 +10,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
-from datasets import load_dataset
 from experts.factuality import predict
+from training.common.hf_datasets import load_hf_split
 from tqdm import tqdm
 
 
@@ -26,7 +26,7 @@ BENCHMARKS = {
     "FEVER": {
         "hf_id": "fever",
         "config": "v1.0",
-        "split": "paper_test",
+        "split": "test",
         "text_field": "claim",
         "label_field": "label",
     },
@@ -65,10 +65,7 @@ def run_benchmark(name: str, config: dict, limit: int = 100, verbose: bool = Tru
         ds_config = config.get("config")
         split = config.get("split", "test")
 
-        if ds_config:
-            ds = load_dataset(hf_id, ds_config, split=split, trust_remote_code=True)
-        else:
-            ds = load_dataset(hf_id, split=split, trust_remote_code=True)
+        ds = load_hf_split(hf_id, ds_config, split)
 
         subset_size = min(limit, len(ds))
         subset = ds.select(range(subset_size))

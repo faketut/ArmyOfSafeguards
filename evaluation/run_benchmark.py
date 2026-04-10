@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from aggregator.expert_runner import run_all_safeguards_batch
 
-from datasets import load_dataset
+from training.common.hf_datasets import load_hf_split
 from sklearn.metrics import (
     accuracy_score,
     precision_recall_fscore_support,
@@ -222,8 +222,8 @@ def load_benchmark_dataset(benchmark_name: str, limit: Optional[int] = None, hf_
         # Special handling for JailbreakBench which has multiple splits
         if benchmark_name == "JailbreakBench":
             # Load both harmful and benign splits
-            ds_harmful = load_dataset(hf_id, ds_config, split="harmful", trust_remote_code=True)
-            ds_benign = load_dataset(hf_id, ds_config, split="benign", trust_remote_code=True)
+            ds_harmful = load_hf_split(hf_id, ds_config, "harmful")
+            ds_benign = load_hf_split(hf_id, ds_config, "benign")
             
             # Process harmful examples
             for ex in ds_harmful:
@@ -266,7 +266,7 @@ def load_benchmark_dataset(benchmark_name: str, limit: Optional[int] = None, hf_
             # Standard dataset loading
             if ds_config:
                 try:
-                    ds = load_dataset(hf_id, ds_config, split=split, trust_remote_code=True)
+                    ds = load_hf_split(hf_id, ds_config, split)
                 except ValueError as e:
                     # Check if it's a split error
                     if "Unknown split" in str(e) or "Should be one of" in str(e):
@@ -298,7 +298,7 @@ def load_benchmark_dataset(benchmark_name: str, limit: Optional[int] = None, hf_
                 # Some datasets require a config - try to load with split only
                 # If that fails, the error will be caught and reported
                 try:
-                    ds = load_dataset(hf_id, split=split, trust_remote_code=True)
+                    ds = load_hf_split(hf_id, None, split)
                 except ValueError as e:
                     if "Config name is missing" in str(e) or "config" in str(e).lower():
                         available_configs = config.get("available_configs", [])

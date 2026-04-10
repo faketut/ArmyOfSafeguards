@@ -177,10 +177,9 @@ def run_training(args: argparse.Namespace) -> int:
 
     rows: List[Dict[str, Any]] = []
     if args.hf_manifest.strip():
-        from datasets import load_dataset
-
         _root = Path(__file__).resolve().parents[2]
         sys.path.insert(0, str(_root))
+        from training.common.hf_datasets import load_hf_split  # type: ignore
         from training.meta.build_meta_from_hf_labels import _extract_text, _map_label  # type: ignore
 
         manifest = json.loads(Path(args.hf_manifest).read_text(encoding="utf-8"))
@@ -213,11 +212,7 @@ def run_training(args: argparse.Namespace) -> int:
 
             for sp in splits:
                 sp = str(sp).strip() or "train"
-                ds = (
-                    load_dataset(dataset, cfg, split=sp, trust_remote_code=True)
-                    if cfg
-                    else load_dataset(dataset, split=sp, trust_remote_code=True)
-                )
+                ds = load_hf_split(dataset, cfg, sp)
                 n = 0
                 for ex in ds:
                     if limit is not None and n >= limit:

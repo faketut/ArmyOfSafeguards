@@ -21,6 +21,7 @@ _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
 from aggregator.expert_runner import run_all_safeguards  # noqa: E402
+from training.common.hf_datasets import load_hf_split  # noqa: E402
 from wrappers.env_utils import load_repo_env  # noqa: E402
 
 
@@ -283,8 +284,6 @@ def main() -> int:
     )
     args = ap.parse_args()
 
-    from datasets import load_dataset
-
     out_path = Path(args.out)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -335,9 +334,7 @@ def main() -> int:
 
             for sp in splits:
                 sp = str(sp).strip() or "train"
-                ds = load_dataset(dataset_id, cfg, split=sp, trust_remote_code=True) if cfg else load_dataset(
-                    dataset_id, split=sp, trust_remote_code=True
-                )
+                ds = load_hf_split(dataset_id, cfg, sp)
                 w, st, sl, se = _write_meta_rows(
                     f,
                     dataset_id=dataset_id,

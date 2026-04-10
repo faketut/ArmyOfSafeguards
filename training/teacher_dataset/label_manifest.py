@@ -27,6 +27,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from aggregator.expert_runner import run_all_safeguards  # noqa: E402
 from expert_q_label import label_from_expert_q  # noqa: E402
+from training.common.hf_datasets import load_hf_split  # noqa: E402
 from wrappers.env_utils import load_repo_env  # noqa: E402
 
 
@@ -120,22 +121,16 @@ def _iter_hf_rows(
     *,
     limit: Optional[int],
 ) -> Iterable[Dict[str, Any]]:
-    from datasets import load_dataset
     from datasets import get_dataset_config_names
 
     try:
-        # Important: Some HF datasets have a single config literally named "default".
-        # Passing config=None is NOT the same as omitting the config argument.
-        if config is None:
-            ds = load_dataset(dataset, split=split)
-        else:
-            ds = load_dataset(dataset, config, split=split)
+        ds = load_hf_split(dataset, config, split)
     except ValueError as e:
         msg = str(e).lower()
         if ("config name is missing" in msg or "available configs" in msg) and not config:
             configs = get_dataset_config_names(dataset)
             if len(configs) == 1:
-                ds = load_dataset(dataset, configs[0], split=split)
+                ds = load_hf_split(dataset, configs[0], split)
             elif len(configs) > 1:
                 raise ValueError(
                     f"Dataset {dataset!r} requires a config. Available configs: {configs}. "

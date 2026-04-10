@@ -24,6 +24,7 @@ import numpy as np
 _ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(_ROOT))
 
+from training.common.hf_datasets import load_hf_split  # noqa: E402
 from training.meta.build_meta_from_hf_labels import _extract_text, _map_label  # noqa: E402
 
 
@@ -40,15 +41,6 @@ def _load_curriculum(path: Path) -> Dict[str, Any]:
     if not isinstance(data, dict) or "experts" not in data:
         raise SystemExit("Curriculum must be a dict with top-level key 'experts'")
     return data
-
-
-def _load_hf_split(hf_id: str, config: Optional[str], split: str):
-    from datasets import load_dataset
-
-    cfg = config.strip() if isinstance(config, str) and config.strip() else None
-    if cfg:
-        return load_dataset(hf_id, cfg, split=split, trust_remote_code=True)
-    return load_dataset(hf_id, split=split, trust_remote_code=True)
 
 
 def _iter_pool_rows(
@@ -95,7 +87,7 @@ def _iter_pool_rows(
 
     for sp in splits:
         sp = str(sp).strip()
-        ds = _load_hf_split(hf_id, config, sp)
+        ds = load_hf_split(hf_id, config, sp)
         n = 0
         for i, ex in enumerate(ds):
             if lim is not None and len(out) >= lim:

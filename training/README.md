@@ -8,6 +8,7 @@ Entry points for fine-tuning experts, building meta-aggregator data, and running
 | [experts/curriculum_native.yaml](experts/curriculum_native.yaml) | Per-expert **native-label** pools (jailbreak / toxicity / sexual / factuality) — no teacher |
 | [experts/build_expert_sft_jsonl.py](experts/build_expert_sft_jsonl.py) | Build SFT JSONL from the curriculum (`--expert`, optional `--target-train-pos-rate`) |
 | [common/sequence_classifier_train.py](common/sequence_classifier_train.py) | Shared HF Trainer loop used by expert `train.py` entry points below |
+| [common/hf_datasets.py](common/hf_datasets.py) | `load_hf_split` — loads splits without deprecated `trust_remote_code`; **FEVER** uses Hub `refs/convert/parquet` (no script) |
 | [teacher_dataset/README.md](teacher_dataset/README.md) | **Q-values** (per-expert P(unsafe)) + in-repo binary label (max-Q vs threshold) → CSV + meta-ready JSONL |
 | [teacher_dataset/run_teacher_meta_pipeline.sh](teacher_dataset/run_teacher_meta_pipeline.sh) | One-shot: teacher-labeled JSONL → `meta_classifier/artifacts/meta_lr.json` |
 | [jailbreak/train.py](jailbreak/train.py) | Fine-tune jailbreak expert from curriculum JSONL (`AOS_JAILBREAK_MODEL` at runtime) |
@@ -28,6 +29,8 @@ export LIMIT=500   # optional cap for iteration
 ### Native experts + unified meta
 
 1. **Per-expert SFT JSONL** — [experts/curriculum_native.yaml](experts/curriculum_native.yaml) gives each expert positives **only** from that head’s README-native unsafe data; rows that are unsafe under *other* heads (jailbreak / toxicity / sexual / factuality) are pooled as **negatives** (`y=0`) for this head. Edit pools if needed, then:
+
+   **HF access:** Run `huggingface-cli login` or set `HF_TOKEN` for **gated** datasets (e.g. `cardiffnlp/x_sensitive`, JailbreakBench pools, some benchmarks). Build SFT JSONL **before** `train.py`; if the builder fails, you will not have `--data` yet (missing JSONL is expected until the builder succeeds).
 
 ```bash
 python training/experts/build_expert_sft_jsonl.py --expert jailbreak --out data/jailbreak_native.jsonl --target-train-pos-rate 0.3

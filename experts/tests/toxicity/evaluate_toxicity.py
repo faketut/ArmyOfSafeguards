@@ -13,8 +13,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 from experts.toxicity import MODEL_ID, predict
 
 try:
-    from datasets import load_dataset
     from sklearn.metrics import accuracy_score, precision_recall_fscore_support
+    from training.common.hf_datasets import load_hf_split
 except ImportError as e:
     print(f"Error: Required package not found: {e}")
     print("Install with: pip install datasets scikit-learn")
@@ -48,10 +48,8 @@ def map_label(raw_label: Any, mapping: Any) -> str:
 
 
 def evaluate_dataset(dataset_name: str, config: Dict[str, Any], limit: int = 100) -> Dict[str, Any]:
-    if config["subset"]:
-        dataset = load_dataset(config["dataset"], config["subset"], split=config["split"], trust_remote_code=True)
-    else:
-        dataset = load_dataset(config["dataset"], split=config["split"], trust_remote_code=True)
+    subset = config.get("subset")
+    dataset = load_hf_split(config["dataset"], subset, config["split"])
 
     if len(dataset) > limit:
         dataset = dataset.select(range(limit))

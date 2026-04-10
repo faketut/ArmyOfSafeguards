@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from aggregator.expert_runner import run_all_safeguards  # noqa: E402
 from expert_q_label import label_from_expert_q  # noqa: E402
 from meta_classifier.feature_builder import FeatureSpec, build_feature_vector  # noqa: E402
+from training.common.hf_datasets import load_hf_split  # noqa: E402
 from wrappers.env_utils import load_repo_env  # noqa: E402
 
 
@@ -57,12 +58,7 @@ def _load_hf_texts(
     text_field: str,
     limit: Optional[int],
 ) -> List[Tuple[Optional[str], str]]:
-    from datasets import load_dataset
-
-    if hf_config:
-        ds = load_dataset(hf_id, hf_config, split=split)
-    else:
-        ds = load_dataset(hf_id, split=split)
+    ds = load_hf_split(hf_id, hf_config, split)
     out: List[Tuple[Optional[str], str]] = []
     for i, ex in enumerate(ds):
         if limit is not None and i >= limit:
