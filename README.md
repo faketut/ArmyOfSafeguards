@@ -2,6 +2,8 @@
 
 A modular research stack of **safeguard experts** (specialized detectors for toxicity, sexual/sensitive content, jailbreak attempts, and factuality) plus **aggregators** that fuse expert outputs into a single safety verdict. Optional **meta-classifiers** learn a policy over expert probabilities; **benchmarks** and **training** tooling live in-repo.
 
+The fusion is **per-axis by design**: one constrained logistic head per specialist (monotonic w.r.t. its own expert), so the fused score never moves opposite to a specialist on its home turf. A CI-friendly fidelity gate in `evaluation/run_benchmark.py` enforces this invariant on every benchmark.
+
 ## Architecture
 
 High-level runtime path: text passes through parallel **experts**, then an **aggregator** (threshold, weighted sum, or learned meta-model) produces `is_safe`, confidences, and per-expert `individual_results`.
@@ -21,7 +23,7 @@ flowchart LR
   MP --> OUT
 ```
 
-`expert_runner` invokes the four heads in **experts/** (factuality, toxicity, sexual, jailbreak) and packs their outputs into `individual_results`. Runtime selects **one** aggregator. The **meta** path maps those features through `meta_classifier` before returning the same style of result as base/weighted.
+`expert_runner` invokes the four heads in **experts/** (factuality, toxicity, sexual, jailbreak) and packs their outputs into `individual_results`. Runtime selects **one** aggregator. The **meta** path maps those features through `meta_classifier` before returning the same style of result as base/weighted. By default the meta aggregator routes each axis through its own per-axis head (`meta_classifier/artifacts/meta_lr_axis_<axis>.json`); set `AOS_META_DISABLE_PER_AXIS=1` to fall back to the legacy single global LR.
 
 Offline **data and training** flow (native labels, expert-Q features, meta training):
 

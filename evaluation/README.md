@@ -81,11 +81,14 @@ python evaluation/run_benchmark.py --all --threshold 0.75
 - `--benchmark`: Name of the benchmark to run (HarmBench, JailbreakBench, or WildGuardMix)
 - `--all`: Run all available benchmarks
 - `--limit`: Maximum number of examples per benchmark (default: all)
-- `--threshold`: Confidence threshold for flagging (default: 0.7)
+- `--threshold`: Confidence threshold for flagging (default: 0.5)
 - `--hf-token`: HuggingFace token for accessing gated datasets (or set `HF_TOKEN` env var)
 - `--config`: Override dataset config (e.g., for HarmBench: 'standard', 'contextual', or 'copyright')
 - `--aggregator`: `base`, `weighted`, or `meta` (default: `weighted`)
 - `--no-save`: Don't save results to JSON file
+- `--no-per-axis`: Disable per-axis (per-expert) reporting (default: enabled)
+- `--fidelity-epsilon FLOAT`: Max allowed F1 regression of fused vs home-axis expert (default: 0.05)
+- `--fidelity-strict`: Exit with non-zero status when any benchmark fails the fidelity gate
 
 ## Output
 
@@ -139,6 +142,36 @@ Results for HarmBench:
     Safe → Unsafe: 8 (False Positives)
     Unsafe → Safe: 3 (False Negatives)
     Unsafe → Unsafe: 57
+```
+
+## Per-axis report & fidelity gate (Phase 1 + 2)
+
+The benchmark runner always reports per-axis (per-specialist) verdicts
+alongside the fused metrics. Each axis (`jailbreak`, `toxicity`, `sexual`,
+`factuality`) gets `accuracy / precision / recall / f1 / available_count`,
+so a fusion regression on the benchmark's home turf is immediately visible.
+
+Each benchmark is also tagged with a `home_axis` (currently all three are
+`jailbreak`). The runner attaches a `fidelity_check` to each result:
+
+```json
+{
+  "home_axis": "jailbreak",
+  "expert_f1": 0.84,
+  "fused_f1": 0.82,
+  "gap": 0.02,
+  "epsilon": 0.05,
+  "passed": true
+}
+```
+
+`gap = expert_f1 − fused_f1`. Only regressions count — `passed = gap ≤ epsilon`.
+Use `--fidelity-strict` to turn the gate into a non-zero exit code (suitable
+for CI):
+
+```bash
+python evaluation/run_benchmark.py --all --aggregator meta \
+  --fidelity-epsilon 0.05 --fidelity-strict
 ```
 
 ## How It Works

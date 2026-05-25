@@ -1,0 +1,18 @@
+{
+  "feature_names": [
+    "p_unsafe_jailbreak",
+    "p_unsafe_toxicity",
+    "p_unsafe_sexual",
+    "p_unsafe_factuality",
+    "has_rules_tag"
+  ],
+  "coef": [
+    0.10082158917479733,
+    0.6871861147747743,
+    0.32598603965148243,
+    0.0056890510137594195,
+    0.0
+  ],
+  "intercept": -1.1968806294094076,
+  "temperature": 1.0
+}

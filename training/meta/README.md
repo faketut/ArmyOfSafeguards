@@ -1,5 +1,57 @@
 # Meta aggregator training pipeline
 
+> **Phase 2 update (preferred path):** the runtime now uses one
+> **per-axis constrained logistic head** per specialist (`jailbreak`,
+> `toxicity`, `sexual`, `factuality`) instead of a single global LR. Each
+> head is monotonic w.r.t. its own expert (own-axis coefficient ≥ 0), so
+> the fused score can no longer move opposite to a specialist on its home
+> turf. See **[Per-axis heads (Phase 2)](#per-axis-heads-phase-2)** below
+> for the current recommended workflow. The legacy global / domain-routed
+> sections that follow are kept for backward compat with
+> `AOS_META_DISABLE_PER_AXIS=1`.
+
+## Per-axis heads (Phase 2)
+
+End-to-end pipeline:
+
+```bash
+# 1. Pool single-axis HF data into one jsonl (you may already have this).
+#    Each row needs: text, label (safe/unsafe), dataset, individual_results.
+#    Use build_meta_from_hf_labels.py per source then concat.
+
+# 2. Project to multi-label rows (one supervised axis per row, others null).
+python3 -m training.meta.build_multilabel_meta \
+  --input training/meta/hf_meta_all.jsonl \
+  --out   training/meta/hf_meta_multilabel.jsonl
+
+# 3. Train one constrained head per axis (skips axes with < --min-rows).
+python3 -m meta_classifier.train_meta_multilabel \
+  --data training/meta/hf_meta_multilabel.jsonl
+# -> meta_classifier/artifacts/meta_lr_axis_<axis>.json
+```
+
+The aggregator picks the new artifacts up automatically — no code or env
+change needed. `aggregator/meta_aggregator.py::evaluate_text` exposes:
+
+- `per_axis[axis] = {p_unsafe, verdict, available, source}` where
+  `source` is `meta_head` (per-axis head used) or `expert_raw`
+  (fallback because no head exists yet for that axis).
+- `meta_probability_unsafe = max(per_axis.p_unsafe)` (OR semantics).
+- `meta_source = "per_axis_heads"` (or `"global_lr"` if all heads missing
+  / disabled).
+
+Axes currently covered (sources mapped in
+[`build_multilabel_meta.py`](build_multilabel_meta.py) `DATASET_TO_AXIS`):
+
+| Axis | HF sources |
+|------|-----------|
+| `jailbreak`  | jackhhao/jailbreak-classification, jailbreakbench/jbb-behaviors, allenai/wildguardmix |
+| `toxicity`   | toxigen/toxigen-data, cglez/civil_comments_clean, pravalika-9/hate_speech_twitter |
+| `sexual`     | cardiffnlp/x_sensitive |
+| `factuality` | **wired but no data yet** — `truthful_qa`, `fever`, `tals/vitaminc`, `climate_fever` are mapped; run `build_meta_from_hf_labels.py` against one and re-run steps 2-3 above to add the head. |
+
+## Legacy: single global LR + domain routing
+
 ## Overview
 
 1. **Label data** — Follow [docs/meta_training_labeling.md](../../docs/meta_training_labeling.md).

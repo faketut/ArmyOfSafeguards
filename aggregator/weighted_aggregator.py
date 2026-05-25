@@ -16,6 +16,7 @@ Where:
 from typing import Dict, List, Any, Optional
 
 from aggregator.expert_runner import run_all_safeguards
+from aggregator.per_axis import build_per_axis
 from policy.dynamic_threshold import context_from_dict
 from policy.triage import TriageConfig, triage_score
 from rules.engine import load_rule_engine_from_env, rules_enabled
@@ -233,7 +234,8 @@ def aggregate_results(
         'weighted_contributions': weighted_contributions,
         'probabilities': probabilities,
         'weights': weights_used,  # Return the normalized weights actually used
-        'individual_results': results
+        'individual_results': results,
+        'per_axis': build_per_axis(results, threshold=threshold),
     }
 
 
@@ -260,6 +262,13 @@ def evaluate_text(
         rule_matches = engine.match(text)
         hard_blocks = [m for m in rule_matches if m.action == "block"]
         if hard_blocks:
+            ir = {
+                "rules": {
+                    "label": "block",
+                    "confidence": 1.0,
+                    "matches": [m.__dict__ for m in rule_matches],
+                }
+            }
             return {
                 "is_safe": False,
                 "flags": [
@@ -267,13 +276,8 @@ def evaluate_text(
                     for m in hard_blocks
                 ],
                 "average_confidence": 1.0,
-                "individual_results": {
-                    "rules": {
-                        "label": "block",
-                        "confidence": 1.0,
-                        "matches": [m.__dict__ for m in rule_matches],
-                    }
-                },
+                "individual_results": ir,
+                "per_axis": build_per_axis(ir, threshold=threshold if threshold is not None else 0.5),
                 "rule_matches": [m.__dict__ for m in rule_matches],
             }
 

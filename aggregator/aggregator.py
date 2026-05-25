@@ -15,7 +15,7 @@ from typing import Any, Dict, Literal
 # Ensure project root is importable when executed as a script.
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-AggregatorType = Literal["base", "weighted"]
+AggregatorType = Literal["base", "weighted", "meta"]
 
 
 def evaluate_text(
@@ -29,7 +29,7 @@ def evaluate_text(
     Args:
         text: Input text to evaluate.
         threshold: Threshold used by the chosen aggregator.
-        aggregator: Which aggregator logic to use ("base" or "weighted").
+        aggregator: Which aggregator logic to use ("base", "weighted", or "meta").
 
     Returns:
         Dict with at least:
@@ -38,6 +38,11 @@ def evaluate_text(
         - average_confidence: float
         - individual_results: dict
     """
+    if aggregator == "meta":
+        from aggregator.meta_aggregator import evaluate_text as _eval
+
+        return _eval(text, threshold=threshold)
+
     if aggregator == "weighted":
         from aggregator.weighted_aggregator import evaluate_text as _eval
 
@@ -60,7 +65,7 @@ def _build_cli() -> argparse.ArgumentParser:
     parser.add_argument(
         "--aggregator",
         type=str,
-        choices=["base", "weighted"],
+        choices=["base", "weighted", "meta"],
         default="base",
         help="Aggregator to use (default: base)",
     )

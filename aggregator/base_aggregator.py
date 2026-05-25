@@ -7,6 +7,7 @@ a unified interface for running multiple safeguards on input text.
 from typing import Dict, List, Any
 
 from aggregator.expert_runner import run_all_safeguards
+from aggregator.per_axis import build_per_axis
 from rules.engine import load_rule_engine_from_env, rules_enabled
 
 
@@ -74,7 +75,8 @@ def aggregate_results(results: Dict[str, Dict[str, Any]], threshold: float = 0.7
         'is_safe': is_safe,
         'flags': flags,
         'average_confidence': avg_confidence,
-        'individual_results': results
+        'individual_results': results,
+        'per_axis': build_per_axis(results, threshold=threshold),
     }
 
 
@@ -96,6 +98,13 @@ def evaluate_text(text: str, threshold: float = 0.7) -> Dict[str, Any]:
         hard_blocks = [m for m in rule_matches if m.action == "block"]
         if hard_blocks:
             # Preserve existing output keys and add rule info.
+            ir = {
+                "rules": {
+                    "label": "block",
+                    "confidence": 1.0,
+                    "matches": [m.__dict__ for m in rule_matches],
+                }
+            }
             return {
                 "is_safe": False,
                 "flags": [
@@ -107,13 +116,8 @@ def evaluate_text(text: str, threshold: float = 0.7) -> Dict[str, Any]:
                     for m in hard_blocks
                 ],
                 "average_confidence": 1.0,
-                "individual_results": {
-                    "rules": {
-                        "label": "block",
-                        "confidence": 1.0,
-                        "matches": [m.__dict__ for m in rule_matches],
-                    }
-                },
+                "individual_results": ir,
+                "per_axis": build_per_axis(ir, threshold=threshold),
                 "rule_matches": [m.__dict__ for m in rule_matches],
             }
 

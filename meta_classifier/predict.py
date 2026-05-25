@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
@@ -19,6 +20,38 @@ DEFAULT_DOMAIN_TO_ARTIFACT = {
     "jailbreak": Path(__file__).parent / "artifacts" / "meta_lr_jailbreak.json",
     "mixed": Path(__file__).parent / "artifacts" / "meta_lr_mixed.json",
 }
+
+
+_warned_artifacts: set[str] = set()
+
+
+def _warn_if_artifact_violates_monotonicity(
+    artifact: "LogisticArtifact", source: str
+) -> None:
+    """Warn (once per source) if any p_unsafe_<expert> coef is negative.
+
+    A negative own-axis coefficient means the meta head moves opposite to its
+    expert on that axis — violates the "fused must not regress vs the
+    specialist" intent. Per-axis heads (meta_lr_axis_*.json) avoid this by
+    construction; legacy `meta_lr.json` may still contain negatives.
+    """
+    if source in _warned_artifacts:
+        return
+    bad = []
+    for name, coef in zip(artifact.feature_names, artifact.coef):
+        if name.startswith("p_unsafe_") and coef < 0:
+            bad.append((name, float(coef)))
+    if bad:
+        msg = (
+            f"[meta_classifier] WARNING: meta artifact {source!r} has negative "
+            f"own-axis coefficient(s): "
+            + ", ".join(f"{n}={c:+.3f}" for n, c in bad)
+            + ". This means the fused score moves opposite to the specialist "
+            "on those axes. Consider switching to per-axis heads "
+            "(meta_classifier/train_meta_multilabel.py)."
+        )
+        print(msg, file=sys.stderr)
+    _warned_artifacts.add(source)
 
 
 def get_artifact_path_from_env() -> Path:
@@ -142,6 +175,7 @@ def meta_predict_proba(
     mt = str(payload.get("model_type", "")).lower()
     if "coef" in payload and mt not in ("xgb", "mlp"):
         artifact = LogisticArtifact.load(manifest_path)
+        _warn_if_artifact_violates_monotonicity(artifact, str(manifest_path))
         p = float(predict_proba(artifact, feats))
         return p
 
@@ -171,3 +205,43 @@ def meta_predict_proba_routed(
     if fallback_artifact_path is not None:
         return meta_predict_proba(individual_results, artifact_path=fallback_artifact_path, spec=spec)
     return meta_predict_proba(individual_results, spec=spec)
+
+
+# Phase 2 per-axis meta heads (see meta_classifier/train_meta_multilabel.py).
+# Each axis artifact is a standard LogisticArtifact JSON. Lives next to the
+# global artifact under DEFAULT_AXIS_ARTIFACT_DIR. Missing artifacts are
+# silently skipped — callers get a dict keyed only by axes that have a head.
+DEFAULT_AXIS_ARTIFACT_DIR = Path(__file__).parent / "artifacts"
+DEFAULT_AXES = ("jailbreak", "toxicity", "sexual", "factuality")
+
+
+def _axis_artifact_path(axis: str, base_dir: Optional[Path] = None) -> Path:
+    bd = base_dir or DEFAULT_AXIS_ARTIFACT_DIR
+    return bd / f"meta_lr_axis_{axis}.json"
+
+
+def meta_predict_per_axis(
+    individual_results: Dict[str, Any],
+    *,
+    axes: Optional[tuple] = None,
+    base_dir: Optional[Path] = None,
+    spec: Optional[FeatureSpec] = None,
+) -> Dict[str, float]:
+    """
+    Predict P(unsafe) per axis using per-axis constrained logistic heads.
+
+    Returns:
+        Dict {axis -> p_unsafe} for axes whose artifact exists. Axes whose
+        artifact is missing are omitted (no fabrication).
+    """
+    if spec is None:
+        spec = FeatureSpec()
+    feats = build_feature_vector(individual_results, spec=spec)
+    out: Dict[str, float] = {}
+    for axis in (axes or DEFAULT_AXES):
+        p = _axis_artifact_path(axis, base_dir)
+        if not p.is_file():
+            continue
+        artifact = LogisticArtifact.load(p)
+        out[axis] = float(predict_proba(artifact, feats))
+    return out

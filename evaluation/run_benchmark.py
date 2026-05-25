@@ -21,6 +21,8 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from aggregator.expert_runner import run_all_safeguards_batch
+from aggregator.per_axis import build_per_axis
+from meta_classifier.feature_builder import DEFAULT_EXPERTS
 
 from training.common.hf_datasets import load_hf_split
 from sklearn.metrics import (
@@ -104,6 +106,17 @@ BENCHMARKS = {
         "requires_auth": True,  # This is a gated dataset
         "available_configs": ["wildguardtrain", "wildguardtest"]  # Available config options
     }
+}
+
+
+# Phase 2 E: each benchmark's "home axis" — the specialist whose domain the
+# benchmark exercises. Used by the fidelity gate to compare fused F1 against
+# the expert's own F1 on that benchmark, enforcing the project's initial
+# intent ("fusion must not regress vs the specialist on its home turf").
+BENCHMARK_HOME_AXIS: Dict[str, str] = {
+    "HarmBench": "jailbreak",
+    "JailbreakBench": "jailbreak",
+    "WildGuardMix": "jailbreak",
 }
 
 
@@ -557,7 +570,9 @@ def evaluate_on_benchmark(
     verbose: bool = True,
     hf_token: Optional[str] = None,
     config_override: Optional[str] = None,
-    aggregator: str = 'weighted'
+    aggregator: str = 'weighted',
+    per_axis_enabled: bool = True,
+    fidelity_epsilon: float = 0.05,
 ) -> Dict[str, Any]:
     """
     Evaluate the safeguarding system on a benchmark dataset.
@@ -754,6 +769,59 @@ def evaluate_on_benchmark(
             }
         }
 
+        # Per-axis (per-expert) metrics: expose how each specialist would have
+        # decided on the same benchmark, so fused vs expert regressions are
+        # visible. Reporting only — no hard gate in Phase 1.
+        if per_axis_enabled:
+            axis_metrics: Dict[str, Any] = {}
+            for axis in DEFAULT_EXPERTS:
+                axis_preds: List[str] = []
+                available_count = 0
+                for entry in individual_results:
+                    ir = entry.get("individual_results", {}) if isinstance(entry, dict) else {}
+                    pa = build_per_axis(ir, threshold=threshold)
+                    info = pa.get(axis, {"verdict": "safe", "available": False})
+                    if info.get("available"):
+                        available_count += 1
+                    axis_preds.append(info.get("verdict", "safe"))
+
+                a_acc = accuracy_score(ground_truth_labels, axis_preds)
+                a_prec, a_rec, a_f1, _ = precision_recall_fscore_support(
+                    ground_truth_labels,
+                    axis_preds,
+                    average="binary",
+                    pos_label="unsafe",
+                    zero_division=0,
+                )
+                axis_metrics[axis] = {
+                    "accuracy": float(a_acc),
+                    "precision": float(a_prec),
+                    "recall": float(a_rec),
+                    "f1_score": float(a_f1),
+                    "pred_unsafe": int(axis_preds.count("unsafe")),
+                    "pred_safe": int(axis_preds.count("safe")),
+                    "available_count": int(available_count),
+                }
+            results["per_axis_metrics"] = axis_metrics
+
+            # Phase 2 E: fidelity gate against the benchmark's home axis.
+            # Records whether the fused F1 regresses from the specialist F1
+            # by more than `fidelity_epsilon` on its home turf. Reporting
+            # only here — strict enforcement happens in __main__.
+            home_axis = BENCHMARK_HOME_AXIS.get(benchmark_name)
+            if home_axis and home_axis in axis_metrics:
+                exp = axis_metrics[home_axis]
+                gap = float(exp["f1_score"]) - float(f1)
+                results["fidelity_check"] = {
+                    "home_axis": home_axis,
+                    "expert_f1": float(exp["f1_score"]),
+                    "fused_f1": float(f1),
+                    "gap": gap,  # positive => fused worse than expert
+                    "epsilon": float(fidelity_epsilon),
+                    "passed": bool(gap <= fidelity_epsilon),
+                    "expert_available_count": int(exp["available_count"]),
+                }
+
         # Gray-zone triage stats (if aggregators provide verdict)
         needs_review = sum(1 for v in verdicts if v == "needs_review")
         results["triage"] = {
@@ -793,6 +861,30 @@ def evaluate_on_benchmark(
             if results.get("triage"):
                 print(f"\n  Triage (gray-zone) Stats:")
                 print(f"    Needs review: {results['triage']['needs_review']} ({results['triage']['review_rate']:.2%})")
+            if results.get("per_axis_metrics"):
+                print(f"\n  Per-Axis vs Fused (initial-intent fidelity check):")
+                header = f"    {'axis':<12} {'acc':>8} {'prec':>8} {'rec':>8} {'f1':>8} {'avail':>8}"
+                print(header)
+                print("    " + "-" * (len(header) - 4))
+                print(f"    {'FUSED':<12} {accuracy:>8.2%} {precision:>8.2%} {recall:>8.2%} {f1:>8.2%} {len(texts):>8d}")
+                for axis_name, m in results["per_axis_metrics"].items():
+                    print(
+                        f"    {axis_name:<12} "
+                        f"{m['accuracy']:>8.2%} {m['precision']:>8.2%} "
+                        f"{m['recall']:>8.2%} {m['f1_score']:>8.2%} "
+                        f"{m['available_count']:>8d}"
+                    )
+                print("    (Phase 1: reporting only. Large gap on the axis matching this")
+                print("     benchmark's domain indicates fusion regression vs the expert.)")
+            if results.get("fidelity_check"):
+                fc = results["fidelity_check"]
+                mark = "PASS" if fc["passed"] else "FAIL"
+                sign = "+" if fc["gap"] >= 0 else ""
+                print(
+                    f"\n  Fidelity gate [{mark}] home_axis={fc['home_axis']} "
+                    f"expert_f1={fc['expert_f1']:.2%} fused_f1={fc['fused_f1']:.2%} "
+                    f"gap={sign}{fc['gap']:.2%} eps={fc['epsilon']:.2%}"
+                )
         
         return results
         
@@ -812,7 +904,9 @@ def run_all_benchmarks(
     threshold: float = 0.5,
     save_results: bool = True,
     hf_token: Optional[str] = None,
-    aggregator: str = 'weighted'
+    aggregator: str = 'weighted',
+    per_axis_enabled: bool = True,
+    fidelity_epsilon: float = 0.05,
 ) -> List[Dict[str, Any]]:
     """
     Run evaluation on all available benchmarks.
@@ -845,7 +939,9 @@ def run_all_benchmarks(
             threshold=threshold,
             verbose=True,
             hf_token=hf_token,
-            aggregator=aggregator
+            aggregator=aggregator,
+            per_axis_enabled=per_axis_enabled,
+            fidelity_epsilon=fidelity_epsilon,
         )
         all_results.append(result)
     
@@ -985,6 +1081,22 @@ Examples:
         default='weighted',
         help="Aggregator type: 'base' (threshold-based), 'weighted' (weighted sum, default), or 'meta' (learned LR meta-classifier)"
     )
+    parser.add_argument(
+        "--no-per-axis",
+        action="store_true",
+        help="Disable per-axis (per-expert) metrics in the report (default: enabled)",
+    )
+    parser.add_argument(
+        "--fidelity-epsilon",
+        type=float,
+        default=0.05,
+        help="Max allowed F1 regression of fused vs home-axis expert (default: 0.05)",
+    )
+    parser.add_argument(
+        "--fidelity-strict",
+        action="store_true",
+        help="Exit with non-zero status if any benchmark fails the fidelity gate",
+    )
     
     args = parser.parse_args()
     
@@ -997,6 +1109,7 @@ Examples:
     if args.benchmark and args.all:
         parser.error("Cannot specify both --benchmark and --all")
     
+    all_results: List[Dict[str, Any]] = []
     if args.benchmark:
         result = evaluate_on_benchmark(
             args.benchmark,
@@ -1005,9 +1118,12 @@ Examples:
             verbose=not args.quiet,
             hf_token=hf_token,
             config_override=args.config,
-            aggregator=args.aggregator
+            aggregator=args.aggregator,
+            per_axis_enabled=not args.no_per_axis,
+            fidelity_epsilon=args.fidelity_epsilon,
         )
-        
+        all_results = [result]
+
         if not args.no_save and "error" not in result:
             output_dir = Path(__file__).parent
             output_file = output_dir / f"benchmark_{args.benchmark.lower()}_{args.aggregator}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
@@ -1023,11 +1139,36 @@ Examples:
             print(f"\n✅ Results saved to: {output_file}")
     else:
         # Run all benchmarks
-        run_all_benchmarks(
+        all_results = run_all_benchmarks(
             limit=args.limit,
             threshold=args.threshold,
             save_results=not args.no_save,
             hf_token=hf_token,
-            aggregator=args.aggregator
+            aggregator=args.aggregator,
+            per_axis_enabled=not args.no_per_axis,
+            fidelity_epsilon=args.fidelity_epsilon,
         )
+
+    # Phase 2 E: enforce the fidelity gate as a CI exit code when requested.
+    failures = [
+        r for r in all_results
+        if isinstance(r, dict)
+        and r.get("fidelity_check")
+        and not r["fidelity_check"]["passed"]
+    ]
+    if failures:
+        print("\n" + "=" * 70)
+        print(f"FIDELITY GATE: {len(failures)} benchmark(s) failed")
+        print("=" * 70)
+        for r in failures:
+            fc = r["fidelity_check"]
+            print(
+                f"  {r.get('benchmark', '?'):<20} "
+                f"home_axis={fc['home_axis']:<10} "
+                f"expert_f1={fc['expert_f1']:.2%} "
+                f"fused_f1={fc['fused_f1']:.2%} "
+                f"gap=+{fc['gap']:.2%} > eps={fc['epsilon']:.2%}"
+            )
+        if args.fidelity_strict:
+            sys.exit(1)
 
